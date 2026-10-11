@@ -1,0 +1,10 @@
+{
+  "name": "m2companion-yut-nori-helper",
+  "version": "0.8.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test tests/*.test.js",
+    "serve": "python3 -m http.server 8080"
+  }
+}

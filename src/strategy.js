@@ -1,0 +1,550 @@
+import { ROLLS, FINISH, HOME, ROUTES, routeChoicesForNode } from './board.js';
+import { cloneGame, legalMoves, applyRoll, applyMove, scoreBand } from './engine.js';
+import { ROLL_KEYS, distributionFor, getProbabilityModel } from './probabilities.js';
+
+const SEARCH_DEPTH = 3;
+const MOVE_SEARCH_DEPTH = 2;
+const GOLD_THRESHOLD = 220;
+const EQUIVALENCE_TOLERANCE = 120;
+
+// Recommendation-level caches avoid repeating the same depth-limited search several
+// times during one UI render (board highlight, recommendation card, click metadata).
+const rollRecommendationCache = new Map();
+const moveRecommendationCache = new Map();
+const CACHE_LIMIT = 120;
+
+function remember(cache, key, value) {
+  if (cache.size >= CACHE_LIMIT) cache.delete(cache.keys().next().value);
+  cache.set(key, value);
+  return value;
+}
+
+function probabilityModelKey(model) {
+  return `${model.source}:${model.sample.cpuRolls}:${model.sample.selectedPlayerRolls}:${model.selectionMultiplier.toFixed(4)}`;
+}
+
+const STRATEGIC_NODE_BONUS = {
+  O1: 1350,
+  O5: 520,
+  O10: 1450,
+  O15: 280,
+  C: 700
+};
+
+function opponentOf(actor) {
+  return actor === 'player' ? 'computer' : 'player';
+}
+
+function routeRemaining(routeName, node) {
+  const route = ROUTES[routeName];
+  if (!route) return Infinity;
+  const idx = route.indexOf(node);
+  if (idx < 0) return Infinity;
+  return route.length - 1 - idx;
+}
+
+function effectiveRemaining(piece) {
+  if (piece.finished || piece.node === FINISH) return 0;
+  if (piece.node === HOME) return 20;
+
+  const choices = new Set([piece.route, ...routeChoicesForNode(piece.node, piece.route)]);
+  let best = Infinity;
+  for (const routeName of choices) {
+    best = Math.min(best, routeRemaining(routeName, piece.node));
+  }
+  return Number.isFinite(best) ? best : 20;
+}
+
+function groupedPieces(pieces) {
+  const groups = new Map();
+  for (const piece of pieces) {
+    if (piece.finished || piece.node === HOME) continue;
+    if (!groups.has(piece.node)) groups.set(piece.node, []);
+    groups.get(piece.node).push(piece);
+  }
+  return groups;
+}
+
+function captureThreat(game, actor, model = getProbabilityModel()) {
+  const opponent = opponentOf(actor);
+  if (game.winner || game.turn !== opponent) {
+    return { weightedRisk: 0, exposedPieces: 0, stackAtRisk: false, outcomes: [] };
+  }
+
+  const ownByNode = groupedPieces(game[actor]);
+  if (!ownByNode.size) return { weightedRisk: 0, exposedPieces: 0, stackAtRisk: false, outcomes: [] };
+
+  const distribution = distributionFor(opponent, null, model);
+  let weightedRisk = 0;
+  let exposedPieces = 0;
+  let stackAtRisk = false;
+  const outcomes = [];
+
+  for (const rollKey of ROLL_KEYS) {
+    const probability = distribution[rollKey] ?? 0;
+    if (!probability) continue;
+    const moves = legalMoves(game, opponent, rollKey);
+    let bestCapture = 0;
+    let bestNode = null;
+    for (const move of moves) {
+      const targets = ownByNode.get(move.to) ?? [];
+      if (targets.length > bestCapture) {
+        bestCapture = targets.length;
+        bestNode = move.to;
+      }
+    }
+    if (!bestCapture) continue;
+    weightedRisk += bestCapture * probability;
+    exposedPieces = Math.max(exposedPieces, bestCapture);
+    stackAtRisk ||= bestCapture >= 2;
+    outcomes.push({ rollKey, probability, captured: bestCapture, node: bestNode });
+  }
+
+  return { weightedRisk, exposedPieces, stackAtRisk, outcomes };
+}
+
+function nextTurnCapturePotential(game, actor, model = getProbabilityModel()) {
+  if (game.winner) return 0;
+  const opponent = opponentOf(actor);
+  const opponentByNode = groupedPieces(game[opponent]);
+  if (!opponentByNode.size) return 0;
+
+  const distribution = distributionFor(actor, null, model);
+  let expected = 0;
+  for (const rollKey of ROLL_KEYS) {
+    let best = 0;
+    for (const move of legalMoves(game, actor, rollKey)) {
+      best = Math.max(best, (opponentByNode.get(move.to) ?? []).length);
+    }
+    expected += best * (distribution[rollKey] ?? 0);
+  }
+  return expected;
+}
+
+function estimatedThrowsToFinish(game, actor) {
+  const unfinished = game[actor].filter(piece => !piece.finished);
+  if (!unfinished.length) return 0;
+
+  // Stacked pieces travel together, so estimate each occupied group once.
+  const groups = [];
+  const seen = new Set();
+  for (const piece of unfinished) {
+    const key = piece.node === HOME ? piece.id : `${piece.node}:${piece.route}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const same = piece.node === HOME
+      ? [piece]
+      : unfinished.filter(p => p.node === piece.node && p.route === piece.route);
+    groups.push(same);
+  }
+
+  let throws = 0;
+  for (const group of groups) {
+    const piece = group[0];
+    if (piece.node === 'O1') {
+      // O1 has the unique Back Do finish line, so ordinary distance is misleading.
+      throws += 1.6;
+      continue;
+    }
+    const remaining = effectiveRemaining(piece);
+    // This is a leaf heuristic only. The actual near-term outcomes are handled by expectimax.
+    throws += Math.max(1, remaining / 2.9);
+  }
+  return throws;
+}
+
+function projectedRewardPoints(game) {
+  if (game.winner) return game.points;
+  const unfinished = game.player.filter(piece => !piece.finished).length;
+  const finishCredits = unfinished * 10;
+  const estimatedThrowCost = estimatedThrowsToFinish(game, 'player') * 10;
+  return game.points + finishCredits - estimatedThrowCost;
+}
+
+function goldPotential(game) {
+  if (game.winner) return game.winner === 'player' && game.points >= GOLD_THRESHOLD ? 1 : 0;
+  const projected = projectedRewardPoints(game);
+  // A bounded potential proxy, not a claimed probability. Search explanations never expose it as %.
+  return Math.max(0, Math.min(1, 0.5 + (projected - GOLD_THRESHOLD) / 80));
+}
+
+function winPotential(game) {
+  if (game.winner) return game.winner === 'player' ? 1 : 0;
+  const ownFinished = game.player.filter(p => p.finished).length;
+  const cpuFinished = game.computer.filter(p => p.finished).length;
+  const ownRemaining = game.player.reduce((sum, p) => sum + effectiveRemaining(p), 0);
+  const cpuRemaining = game.computer.reduce((sum, p) => sum + effectiveRemaining(p), 0);
+  const advantage = (ownFinished - cpuFinished) * 0.22 + (cpuRemaining - ownRemaining) / 80;
+  return Math.max(0, Math.min(1, 0.5 + advantage));
+}
+
+function boardValue(game, actor = 'player', model = getProbabilityModel()) {
+  const opponent = opponentOf(actor);
+  if (game.winner === actor) {
+    const band = actor === 'player' ? scoreBand(game.points) : 'Bronze';
+    if (actor === 'player' && band === 'Gold') return 10_000_000 + game.points * 100;
+    return 3_000_000 + (actor === 'player' ? game.points * 50 : 0);
+  }
+  if (game.winner === opponent) return -10_000_000;
+
+  let value = 0;
+  const own = game[actor];
+  const opp = game[opponent];
+
+  const ownFinished = own.filter(p => p.finished).length;
+  const oppFinished = opp.filter(p => p.finished).length;
+  value += ownFinished * 22_000;
+  value -= oppFinished * 19_000;
+
+  for (const piece of own) {
+    if (piece.finished) continue;
+    const remaining = effectiveRemaining(piece);
+    value += (20 - remaining) * 320;
+    value += STRATEGIC_NODE_BONUS[piece.node] ?? 0;
+  }
+
+  for (const piece of opp) {
+    if (piece.finished) continue;
+    const remaining = effectiveRemaining(piece);
+    value -= (20 - remaining) * 210;
+  }
+
+  const ownGroups = groupedPieces(own);
+  for (const [node, pieces] of ownGroups.entries()) {
+    if (pieces.length < 2) continue;
+    const remaining = Math.min(...pieces.map(effectiveRemaining));
+    value += 900;
+    if (remaining <= 8) value += 850;
+    if (remaining <= 4) value += 1000;
+    if (node === 'O1') value += 2600;
+    if (node === 'O10' || node === 'C') value += 900;
+  }
+
+  const oppGroups = groupedPieces(opp);
+  for (const pieces of oppGroups.values()) {
+    if (pieces.length >= 2) value -= 600;
+  }
+
+  const threat = captureThreat(game, actor, model);
+  value -= threat.weightedRisk * 4200;
+  if (threat.stackAtRisk) value -= 1200;
+  value += nextTurnCapturePotential(game, actor, model) * 900;
+
+  if (actor === 'player') {
+    // Gold preservation is the primary strategic objective. The projection deliberately
+    // assumes no future capture points; captures remain upside rather than guaranteed score.
+    const projected = projectedRewardPoints(game);
+    value += game.points * 55;
+    value += goldPotential(game) * 18_000;
+    value += winPotential(game) * 8_000;
+    if (projected >= GOLD_THRESHOLD) value += 5500 + (projected - GOLD_THRESHOLD) * 120;
+    else value -= (GOLD_THRESHOLD - projected) * 180;
+  }
+
+  if (game.turn === actor && game.bonusThrow) value += 1700;
+  return value;
+}
+
+function transitionFacts(before, after, actor, move) {
+  const opponent = opponentOf(actor);
+  const beforeOppHome = before[opponent].filter(p => p.node === HOME).length;
+  const afterOppHome = after[opponent].filter(p => p.node === HOME).length;
+  const beforeFinished = before[actor].filter(p => p.finished).length;
+  const afterFinished = after[actor].filter(p => p.finished).length;
+  const captured = Math.max(0, afterOppHome - beforeOppHome);
+  const finished = Math.max(0, afterFinished - beforeFinished);
+  const ownAtDestination = move.to === FINISH
+    ? 0
+    : after[actor].filter(p => !p.finished && p.node === move.to).length;
+
+  return {
+    captured,
+    finished,
+    formedStack: ownAtDestination === 2 && move.pieceIds.length === 1,
+    movedStack: move.pieceIds.length === 2,
+    shortcut: move.route !== 'OUTER',
+    remaining: move.to === FINISH
+      ? 0
+      : Math.min(...after[actor].filter(p => move.pieceIds.includes(p.id)).map(effectiveRemaining))
+  };
+}
+
+function resolvePass(game) {
+  if (!game.pendingRoll) return game;
+  const { actor, grantsBonus } = game.pendingRoll;
+  const opponent = opponentOf(actor);
+  game.pendingRoll = null;
+  if (grantsBonus) {
+    game.turn = actor;
+    game.bonusThrow = true;
+  } else {
+    game.turn = opponent;
+    game.bonusThrow = false;
+  }
+  return game;
+}
+
+function stateKey(game, depth) {
+  const pieces = ['player', 'computer'].flatMap(actor => game[actor].map(p => `${p.id}:${p.node}:${p.route}:${p.finished ? 1 : 0}`)).join('|');
+  return `${depth};${game.turn};${game.bonusThrow ? 1 : 0};${game.points};${game.throws};${game.winner ?? '-'};${pieces}`;
+}
+
+function searchTurn(game, depth, model, memo) {
+  if (game.winner || depth <= 0) return boardValue(game, 'player', model);
+  const key = stateKey(game, depth);
+  if (memo.has(key)) return memo.get(key);
+
+  let value;
+  if (game.turn === 'player') {
+    value = -Infinity;
+    for (const selected of ROLL_KEYS) {
+      value = Math.max(value, evaluatePlayerSelection(game, selected, depth, model, memo).value);
+    }
+  } else {
+    value = evaluateCpuChance(game, depth, model, memo);
+  }
+
+  memo.set(key, value);
+  return value;
+}
+
+function continuationAfterMove(afterRoll, move, depthAfterRoll, model, memo) {
+  const next = cloneGame(afterRoll);
+  applyMove(next, move);
+  return searchTurn(next, depthAfterRoll, model, memo);
+}
+
+function evaluateRollForActor(game, actor, actualRoll, depth, model, memo) {
+  const afterRoll = cloneGame(game);
+  applyRoll(afterRoll, actor, actualRoll, { bonus: afterRoll.bonusThrow });
+  const moves = legalMoves(afterRoll, actor, actualRoll);
+  const nextDepth = depth - 1;
+
+  if (!moves.length) {
+    resolvePass(afterRoll);
+    return { value: searchTurn(afterRoll, nextDepth, model, memo), bestMove: null, bestAfter: afterRoll };
+  }
+
+  const scored = moves.map(move => {
+    const after = cloneGame(afterRoll);
+    applyMove(after, move);
+    return { move, after, value: searchTurn(after, nextDepth, model, memo) };
+  });
+
+  scored.sort((a, b) => actor === 'player' ? b.value - a.value : a.value - b.value);
+  return { value: scored[0].value, bestMove: scored[0].move, bestAfter: scored[0].after, alternatives: scored };
+}
+
+function evaluatePlayerSelection(game, selectedProbability, depth, model, memo) {
+  const distribution = distributionFor('player', selectedProbability, model);
+  let expected = 0;
+  const outcomes = [];
+  for (const actualRoll of ROLL_KEYS) {
+    const probability = distribution[actualRoll] ?? 0;
+    if (!probability) continue;
+    const result = evaluateRollForActor(game, 'player', actualRoll, depth, model, memo);
+    expected += probability * result.value;
+    outcomes.push({ actualRoll, probability, ...result });
+  }
+  return { value: expected, selectedProbability, outcomes };
+}
+
+function evaluateCpuChance(game, depth, model, memo) {
+  const distribution = distributionFor('computer', null, model);
+  let expected = 0;
+  for (const actualRoll of ROLL_KEYS) {
+    const probability = distribution[actualRoll] ?? 0;
+    if (!probability) continue;
+    const result = evaluateRollForActor(game, 'computer', actualRoll, depth, model, memo);
+    expected += probability * result.value;
+  }
+  return expected;
+}
+
+function describeMove(before, after, actor, move, facts, model = getProbabilityModel()) {
+  const reasons = [];
+  if (after.winner === actor) reasons.push('wins the game');
+  if (facts.finished === 2) reasons.push('finishes both pieces');
+  else if (facts.finished === 1) reasons.push('finishes a piece');
+  if (move.special === 'FIRST_NODE_BACK_DO_FINISH') reasons.push('Back Do from O1 → Finish');
+  if (facts.captured === 2) reasons.push('captures a 2-piece stack');
+  else if (facts.captured === 1) reasons.push('captures a CPU piece');
+  if (facts.formedStack) reasons.push('stacks your pieces');
+  if (move.to === 'O10') reasons.push('reaches the fast O10 shortcut');
+  else if (move.to === 'C') reasons.push('reaches centre');
+  else if (move.to === 'O5') reasons.push('opens the top-right shortcut');
+  if (facts.shortcut && ['TL1', 'TL2', 'BR2', 'BR1'].includes(move.to)) reasons.push('uses the fast finish shortcut');
+  if (after.turn === actor && after.bonusThrow) reasons.push('keeps the turn with a bonus throw');
+
+  const threat = captureThreat(after, actor, model);
+  if (threat.weightedRisk === 0 && move.to !== FINISH) reasons.push('avoids an immediate CPU capture line');
+  else if (threat.stackAtRisk) reasons.push('stack is exposed to a CPU capture');
+
+  if (!reasons.length) {
+    if (facts.remaining <= 5) reasons.push('very close to Finish');
+    else if (facts.remaining <= 9) reasons.push('strong route progress');
+    else reasons.push('best multi-turn position');
+  }
+  return reasons;
+}
+
+function scorePendingMove(game, actor, move, model, memo) {
+  const before = cloneGame(game);
+  const after = cloneGame(game);
+  applyMove(after, move);
+  const facts = transitionFacts(before, after, actor, move);
+  const value = searchTurn(after, MOVE_SEARCH_DEPTH, model, memo);
+  return { value, reasons: describeMove(before, after, actor, move, facts, model), remaining: facts.remaining, facts };
+}
+
+function isOpeningState(game) {
+  if (game.winner || game.player.some(p => p.finished)) return false;
+  const normalRollsUsed = Math.max(0, 20 - game.throws);
+  const maxProgress = Math.max(...game.player.map(p => 20 - effectiveRemaining(p)));
+  return normalRollsUsed <= 5 && maxProgress <= 8;
+}
+
+function classifyOpeningPlan(game, row, model) {
+  const intended = row.outcomes.find(outcome => outcome.actualRoll === row.rollKey);
+  const move = intended?.bestMove ?? null;
+  const after = intended?.bestAfter ?? null;
+  if (!move || !after) {
+    return { key: 'FLEXIBLE', label: 'Flexible opening', explanation: 'Keeps multiple routes available while the roll model is still uncertain.' };
+  }
+
+  const facts = transitionFacts(game, after, 'player', move);
+  if (row.rollKey === 'DO' && move.from === HOME && move.to === 'O1') {
+    const threat = captureThreat(after, 'player', model);
+    return {
+      key: 'EARLY_FINISH',
+      label: 'Early Finish',
+      explanation: facts.captured > 0
+        ? 'Target O1, capture the CPU piece, then look for Back Do to Finish early.'
+        : threat.weightedRisk > 0
+          ? 'Target O1, then Back Do; multi-turn search discounts the line for CPU capture risk.'
+          : 'Target O1, then Back Do for the shortest early Finish line.'
+    };
+  }
+
+  if (facts.captured > 0) {
+    return {
+      key: 'CAPTURE',
+      label: 'Capture',
+      explanation: `Target ${move.to} to reset ${facts.captured === 2 ? 'the CPU stack' : 'a CPU piece'} and delay its progress.`
+    };
+  }
+
+  if (facts.formedStack || facts.movedStack) {
+    return { key: 'STACK', label: 'Stack setup', explanation: 'Move both pieces more efficiently while balancing capture exposure.' };
+  }
+
+  if (move.to === 'O5' || move.to === 'O10' || move.route !== 'OUTER') {
+    return { key: 'SHORTCUT', label: 'Shortcut setup', explanation: 'Position for a forced diagonal and a shorter route to Finish.' };
+  }
+
+  if (ROLLS[row.rollKey]?.bonus) {
+    return { key: 'BONUS_TEMPO', label: 'Bonus tempo', explanation: 'Target a bonus-throw result to keep initiative and compound progress.' };
+  }
+
+  return { key: 'PROGRESS', label: 'Positioning', explanation: 'Best expected multi-turn balance of reward score, safety and progress.' };
+}
+
+export function evaluateOpeningPlans(game, actor = 'player', model = getProbabilityModel()) {
+  if (actor !== 'player' || !isOpeningState(game)) return [];
+  const memo = new Map();
+  const rows = ROLL_KEYS.map(rollKey => {
+    const evaluated = evaluatePlayerSelection(game, rollKey, SEARCH_DEPTH, model, memo);
+    const row = { rollKey, value: evaluated.value, outcomes: evaluated.outcomes };
+    return { ...row, plan: classifyOpeningPlan(game, row, model) };
+  }).sort((a, b) => b.value - a.value);
+  return rows;
+}
+
+export function recommendRoll(game, actor = 'player') {
+  if (game.winner || actor !== 'player' || game.turn !== actor || game.pendingRoll) return null;
+  const model = getProbabilityModel();
+  const cacheKey = `roll:${probabilityModelKey(model)}:${stateKey(game, SEARCH_DEPTH)}`;
+  if (rollRecommendationCache.has(cacheKey)) return rollRecommendationCache.get(cacheKey);
+  const memo = new Map();
+  const opening = isOpeningState(game);
+
+  const rows = ROLL_KEYS.map(rollKey => {
+    const evaluated = evaluatePlayerSelection(game, rollKey, SEARCH_DEPTH, model, memo);
+    const row = { rollKey, value: evaluated.value, outcomes: evaluated.outcomes };
+    const plan = opening ? classifyOpeningPlan(game, row, model) : null;
+    const intended = evaluated.outcomes.find(outcome => outcome.actualRoll === rollKey);
+    const intendedMove = intended?.bestMove ?? null;
+    let reason;
+    if (plan) {
+      reason = `Opening strategy: ${plan.label}. ${plan.explanation}`;
+    } else if (intendedMove && intended?.bestAfter) {
+      const facts = transitionFacts(game, intended.bestAfter, actor, intendedMove);
+      reason = describeMove(game, intended.bestAfter, actor, intendedMove, facts, model).join(' · ');
+    } else {
+      reason = 'Best provisional multi-turn line from the current board state.';
+    }
+
+    return {
+      rollKey,
+      value: evaluated.value,
+      bestMove: intendedMove,
+      reason,
+      plan,
+      details: evaluated
+    };
+  }).sort((a, b) => b.value - a.value);
+
+  return remember(rollRecommendationCache, cacheKey, {
+    best: rows[0],
+    alternatives: rows,
+    version: 'v2',
+    horizon: SEARCH_DEPTH,
+    probabilityModel: {
+      source: model.source,
+      cpuRolls: model.sample.cpuRolls,
+      selectedPlayerRolls: model.sample.selectedPlayerRolls
+    }
+  });
+}
+
+export function recommendMove(game, actor = 'player') {
+  if (game.winner || !game.pendingRoll || game.pendingRoll.actor !== actor) return null;
+  const rollKey = game.pendingRoll.rollKey;
+  const moves = legalMoves(game, actor, rollKey);
+  if (!moves.length) return { best: null, alternatives: [], equivalent: false, reason: 'No legal move', version: 'v2' };
+
+  const model = getProbabilityModel();
+  const cacheKey = `move:${probabilityModelKey(model)}:${stateKey(game, MOVE_SEARCH_DEPTH)}:${game.pendingRoll.rollKey}`;
+  if (moveRecommendationCache.has(cacheKey)) return moveRecommendationCache.get(cacheKey);
+  const memo = new Map();
+  const rows = moves.map(move => ({ move, ...scorePendingMove(game, actor, move, model, memo) }))
+    .sort((a, b) => b.value - a.value);
+
+  const bestValue = rows[0].value;
+  const tiedBest = rows.filter(row => Math.abs(row.value - bestValue) <= EQUIVALENCE_TOLERANCE);
+  const equivalent = tiedBest.length > 1;
+
+  return remember(moveRecommendationCache, cacheKey, {
+    best: rows[0],
+    tiedBest,
+    alternatives: rows,
+    equivalent,
+    reason: equivalent
+      ? 'These moves are effectively equivalent in the current multi-turn search.'
+      : rows[0].reasons.join(' · '),
+    version: 'v2'
+  });
+}
+
+export const __strategyInternals = {
+  effectiveRemaining,
+  captureThreat,
+  boardValue,
+  projectedRewardPoints,
+  goldPotential,
+  winPotential,
+  estimatedThrowsToFinish,
+  isOpeningState,
+  searchTurn,
+  classifyOpeningPlan
+};
