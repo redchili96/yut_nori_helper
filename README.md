@@ -1,4 +1,4 @@
-# M2 Companion — Yut Nori Helper v0.8.0 (Beta)
+# M2 Companion — Yut Nori Helper v0.8.1 (Beta)
 
 Manual-state browser helper for the 2026 Gameforge Metin2 Yut Nori event.
 
@@ -79,7 +79,7 @@ The automated suite preserves observed live-client behavior including:
 - local History archive;
 - versioned community JSON export/import;
 - CSV export;
-- pseudonymous random source IDs (which persist per browser);
+- anonymous source IDs only;
 - no server, account or external database required.
 
 ## Community log compatibility
@@ -95,22 +95,13 @@ Archive schema remains `metin2-yut-nori-community-log`, schema version 1. Existi
 - All match data remains browser-local unless the user explicitly exports a community log.
 - Static deployment only: no server-side database, account system or external API is required.
 
-## Privacy and data safety
-
-- The app stores match history in your browser's local storage. No analytics or external data-collection service is included in this release.
-- An export contains in-game actions, timestamps, game IDs and a random browser-specific source ID. The source ID is **pseudonymous**, not completely anonymous: multiple exports can be linked when they share an ID.
-- Exports are created only when the user clicks an export button. Imported files should come from trusted players.
-- Avoid publishing personal details in any screenshots or filenames shared alongside exported logs.
-- See [PRIVACY.md](PRIVACY.md) for details.
-
-## Legal notice
-
-M2 Companion is an independent community project and is **not affiliated with, endorsed by or officially connected to Gameforge or Metin2**. Metin2 and related trademarks belong to their respective owners.
-
-## Public repository
-
-The source code is publicly readable, including the client-side strategy engine. Do not add tokens, credentials, private datasets or personal screenshots to this repository. This project is not automatically open-source-licensed simply because its source is publicly visible.
-
 ## Publishing
 
 This build can be hosted as a static website. Upload the contents of the project directory to any static host and keep the relative `assets/` and `src/` paths unchanged.
+
+
+## v0.8.1 — Strategy Telemetry
+
+This release keeps Strategy Engine v2 decision-making unchanged and enriches new match logs with decision telemetry for later analysis. Player probability decisions now store the ranked Strategy v2 alternatives, internal utility values, utility gaps, opening-plan labels, intended moves, and state diagnostics. Player move events store the ranked legal alternatives, the Helper recommendation, the actual move chosen, and the model utility gap.
+
+The utility values are internal relative scores, not predicted win rates or percentages. Existing schema-v1 community logs remain compatible; telemetry is optional and is only present in games recorded with v0.8.1 or later. CSV exports include the key telemetry ranks, utilities, and gaps, while JSON exports contain the richer decision snapshots.

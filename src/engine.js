@@ -144,7 +144,7 @@ function resetHome(piece) {
   piece.finished = false;
 }
 
-export function applyRoll(game, actor, rollKey, { bonus = game.bonusThrow, selectedProbability = null, recommendedProbability = null } = {}) {
+export function applyRoll(game, actor, rollKey, { bonus = game.bonusThrow, selectedProbability = null, recommendedProbability = null, strategyTelemetry = null } = {}) {
   if (game.phase !== 'PLAYING') throw new Error('Complete the initial toss first.');
   if (game.winner) return game;
   if (game.turn !== actor) throw new Error(`It is ${game.turn}'s turn, not ${actor}'s.`);
@@ -158,7 +158,7 @@ export function applyRoll(game, actor, rollKey, { bonus = game.bonusThrow, selec
 
   game.bonusThrow = false;
   game.pendingRoll = { actor, rollKey, bonus, grantsBonus: Boolean(roll.bonus) };
-  game.log.unshift({ type: 'roll', actor, rollKey, bonus, selectedProbability: actor === 'player' ? selectedProbability : null, recommendedProbability: actor === 'player' ? recommendedProbability : null });
+  game.log.unshift({ type: 'roll', actor, rollKey, bonus, selectedProbability: actor === 'player' ? selectedProbability : null, recommendedProbability: actor === 'player' ? recommendedProbability : null, strategyTelemetry: actor === 'player' ? strategyTelemetry : null });
   return game;
 }
 
@@ -202,7 +202,8 @@ export function applyMove(game, move, metadata = {}) {
     type: 'move', actor, pieceIds: move.pieceIds, from: move.from, to: move.to,
     route: move.route, captured: captured.map(p => p.id), finishedCount,
     special: move.special ?? null,
-    recommendedMove: metadata.recommendedMove ?? null
+    recommendedMove: metadata.recommendedMove ?? null,
+    strategyTelemetry: actor === 'player' ? metadata.strategyTelemetry ?? null : null
   });
   game.pendingRoll = null;
 

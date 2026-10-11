@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createGame, startGame, applyRoll } from '../src/engine.js';
-import { recommendMove, recommendRoll, evaluateOpeningPlans, __strategyInternals } from '../src/strategy.js';
+import { recommendMove, recommendRoll, evaluateOpeningPlans, buildRollTelemetry, buildMoveTelemetry, __strategyInternals } from '../src/strategy.js';
 
 function playing() {
   const g = createGame();
@@ -199,4 +199,46 @@ test('opening planner exposes multiple competing strategies instead of one fixed
   assert.ok(keys.has('EARLY_FINISH'));
   assert.ok(keys.has('CAPTURE'));
   assert.ok(keys.has('SHORTCUT') || keys.has('BONUS_TEMPO'));
+});
+
+test('roll telemetry stores ranked Strategy v2 alternatives without changing the recommendation', () => {
+  const g = playing();
+  g.computer[0].node = 'O2';
+  g.computer[0].route = 'OUTER';
+  const before = structuredClone(g);
+  const rec = recommendRoll(g, 'player');
+  const telemetry = buildRollTelemetry(g, rec, 'GAE');
+
+  assert.equal(rec.best.rollKey, 'DO');
+  assert.equal(telemetry.kind, 'probability-decision');
+  assert.equal(telemetry.utilityScale, 'internal-relative-not-percentage');
+  assert.equal(telemetry.recommendation.rollKey, 'DO');
+  assert.equal(telemetry.alternatives.length, 6);
+  assert.equal(telemetry.alternatives[0].rank, 1);
+  assert.equal(telemetry.alternatives[0].rollKey, 'DO');
+  assert.equal(telemetry.selectedChoice.rollKey, 'GAE');
+  assert.ok(telemetry.selectedChoice.rank > 1);
+  assert.ok(telemetry.selectedChoice.utilityGapFromBest > 0);
+  assert.deepEqual(g, before);
+});
+
+test('move telemetry records the player actual choice and model utility gap', () => {
+  const g = playing();
+  g.player[0].node = 'BR1';
+  g.player[0].route = 'C_TO_FINISH';
+  g.player[1].node = 'O2';
+  g.computer[0].node = 'O4';
+  applyRoll(g, 'player', 'GAE');
+
+  const rec = recommendMove(g, 'player');
+  const capture = rec.alternatives.find(row => row.move.to === 'O4').move;
+  const telemetry = buildMoveTelemetry(g, rec, capture);
+
+  assert.equal(telemetry.kind, 'move-decision');
+  assert.equal(telemetry.recommendation.move.to, 'FINISH');
+  assert.equal(telemetry.actualChoice.move.to, 'O4');
+  assert.ok(telemetry.actualChoice.rank > 1);
+  assert.ok(telemetry.actualChoice.utilityGapFromBest > 0);
+  assert.ok(telemetry.alternatives.every(row => typeof row.utility === 'number'));
+  assert.ok(telemetry.alternatives.every(row => row.resultingState));
 });

@@ -1,17 +1,16 @@
 import { createGame, cloneGame, startGame, applyRoll, legalMoves, applyMove, scoreBand, finishedCount } from './engine.js';
 import { ROLLS, NODE_POSITIONS, EDGES, HOME, FINISH } from './board.js';
-import { recommendRoll, recommendMove } from './strategy.js';
+import { recommendRoll, recommendMove, buildRollTelemetry, buildMoveTelemetry } from './strategy.js';
 import { configureProbabilityModel } from './probabilities.js';
 import { makeId, createSourceId, readArchive, writeArchive, upsertGame, buildGameRecord, exportBundle, mergeBundle, archiveToCsv } from './archive.js';
 import { pushCheckpoint, undoState, redoState } from './timeline.js';
-import { escapeHtml, safeFileId } from './security.js';
 
 let game = createGame();
 let pendingMoves = [];
 let history = [];
 let redoHistory = [];
 let selectedProbability = null;
-const HELPER_VERSION = '0.8.0';
+const HELPER_VERSION = '0.8.1';
 const sourceId = createSourceId();
 let session = { gameId: makeId('game'), startedAt: new Date().toISOString() };
 
@@ -149,17 +148,18 @@ function renderHistory() {
     const details = document.createElement('details');
     details.className = 'history-game';
     const summaryEl = document.createElement('summary');
-    const statusLabel = record.status === 'completed' ? (record.winner === 'player' ? 'WIN' : 'LOSS') : String(record.status ?? 'unknown').toUpperCase();
-    summaryEl.innerHTML = `<div><strong>${escapeHtml(statusLabel)} · ${escapeHtml(record.finalBand)}</strong><span>${escapeHtml(safeDateLabel(record.startedAt))}</span></div><div class="history-meta"><b>${escapeHtml(record.finalPoints)}</b> pts · ${escapeHtml(record.throwsRemaining)} throws</div>`;
+    const statusLabel = record.status === 'completed' ? (record.winner === 'player' ? 'WIN' : 'LOSS') : record.status.toUpperCase();
+    summaryEl.innerHTML = `<div><strong>${statusLabel} · ${record.finalBand}</strong><span>${safeDateLabel(record.startedAt)}</span></div><div class="history-meta"><b>${record.finalPoints}</b> pts · ${record.throwsRemaining} throws</div>`;
     details.appendChild(summaryEl);
 
     const body = document.createElement('div');
     body.className = 'history-game-body';
     const rolls = (record.events ?? []).filter(e => e.type === 'roll' && e.actor === 'player');
     const mapped = rolls.filter(e => e.selectedProbability).length;
+    const strategyDecisions = (record.events ?? []).filter(e => e.strategyTelemetry).length;
     const info = document.createElement('div');
     info.className = 'history-stats';
-    info.innerHTML = `<span>${escapeHtml(record.helperVersion)}</span><span>${record.events?.length ?? 0} events</span><span>${mapped}/${rolls.length} rolls with probability data</span>`;
+    info.innerHTML = `<span>${record.helperVersion}</span><span>${record.events?.length ?? 0} events</span><span>${mapped}/${rolls.length} rolls with probability data</span>${strategyDecisions ? `<span>${strategyDecisions} strategy decisions</span>` : ''}`;
     body.appendChild(info);
 
     const eventList = document.createElement('div');
@@ -184,7 +184,7 @@ function renderHistory() {
     exportBtn.textContent = 'Export game JSON';
     exportBtn.onclick = event => {
       event.preventDefault();
-      exportGamesJson([record], `yut-nori-${safeFileId(record.gameId)}.json`);
+      exportGamesJson([record], `yut-nori-${record.gameId}.json`);
     };
     actions.appendChild(exportBtn);
     body.appendChild(actions);
@@ -592,7 +592,8 @@ function renderMoveChoices() {
       checkpoint(`move ${move.pieceIds.join('+')} ${move.from}→${move.to}`);
       const recBeforeMove = game.pendingRoll?.actor === 'player' ? recommendMove(game, 'player') : null;
       const recommendedMove = recBeforeMove?.best?.move ? { pieceIds: recBeforeMove.best.move.pieceIds, from: recBeforeMove.best.move.from, to: recBeforeMove.best.move.to, route: recBeforeMove.best.move.route } : null;
-      applyMove(game, move, { recommendedMove });
+      const strategyTelemetry = recBeforeMove ? buildMoveTelemetry(game, recBeforeMove, move) : null;
+      applyMove(game, move, { recommendedMove, strategyTelemetry });
       pendingMoves = [];
       render();
     };
@@ -682,10 +683,14 @@ function handleRoll(rollKey) {
   const actor = game.turn;
   checkpoint(`${actor} roll ${rollLabel(rollKey)}`);
   const rollRec = actor === 'player' ? recommendRoll(game, 'player') : null;
+  const strategyTelemetry = actor === 'player' && rollRec
+    ? buildRollTelemetry(game, rollRec, selectedProbability)
+    : null;
   applyRoll(game, actor, rollKey, {
     bonus: game.bonusThrow,
     selectedProbability: actor === 'player' ? selectedProbability : null,
-    recommendedProbability: actor === 'player' ? rollRec?.best?.rollKey ?? null : null
+    recommendedProbability: actor === 'player' ? rollRec?.best?.rollKey ?? null : null,
+    strategyTelemetry
   });
   selectedProbability = null;
   pendingMoves = legalMoves(game, actor, rollKey);
@@ -821,7 +826,6 @@ $('#import-logs-file').addEventListener('change', async event => {
   const file = event.target.files?.[0];
   if (!file) return;
   try {
-    if (file.size > 10 * 1024 * 1024) throw new Error('File exceeds the 10 MB safety limit.');
     const bundle = JSON.parse(await file.text());
     const merged = mergeBundle(readArchive(), bundle);
     writeArchive(merged);

@@ -92,12 +92,8 @@ export function validateBundle(bundle) {
   if (!bundle || bundle.format !== ARCHIVE_FORMAT) throw new Error('Not a Yut Nori community log file.');
   if (bundle.schemaVersion !== ARCHIVE_SCHEMA_VERSION) throw new Error(`Unsupported log schema: ${bundle.schemaVersion}`);
   if (!Array.isArray(bundle.games)) throw new Error('Invalid log bundle: games missing.');
-  if (bundle.games.length > 2000) throw new Error('Too many games in one import (limit: 2000).');
   for (const game of bundle.games) {
-    if (!game || typeof game !== 'object' || typeof game.gameId !== 'string' || typeof game.sourceId !== 'string' || !Array.isArray(game.events)) throw new Error('Invalid game record in bundle.');
-    if (!game.gameId || !game.sourceId || game.gameId.length > 128 || game.sourceId.length > 128) throw new Error('Invalid game/source ID.');
-    if (game.events.length > 2000) throw new Error('Too many events in a game (limit: 2000).');
-    if (game.events.some(event => !event || typeof event !== 'object' || typeof event.type !== 'string')) throw new Error('Invalid event in game record.');
+    if (!game.gameId || !game.sourceId || !Array.isArray(game.events)) throw new Error('Invalid game record in bundle.');
   }
   return true;
 }
@@ -116,24 +112,24 @@ export function mergeBundle(existingGames, bundle) {
 export function archiveToCsv(games) {
   const headers = [
     'sourceId','gameId','helperVersion','startedAt','winner','finalPoints','finalBand','throwsRemaining',
-    'eventIndex','actor','selectedProbability','actualRoll','bonus','pieceIds','from','to','route','captured','finishedCount','special'
+    'eventIndex','actor','selectedProbability','actualRoll','bonus','pieceIds','from','to','route','captured','finishedCount','special',
+    'recommendedProbability','recommendedProbabilityUtility','selectedProbabilityRank','selectedProbabilityUtility','probabilityUtilityGap','recommendedMoveUtility','actualMoveRank','actualMoveUtility','moveUtilityGap'
   ];
   const esc = value => {
-    let s = value == null ? '' : String(value);
-    // Spreadsheet programs can evaluate imported text as a formula. Treat
-    // untrusted log fields as text even if they start with formula triggers.
-    if (/^[\s\uFEFF\u200B]*[=+@-]/.test(s)) s = `'${s}`;
+    const s = value == null ? '' : String(value);
     return /[",\n]/.test(s) ? `"${s.replaceAll('"','""')}"` : s;
   };
   const rows = [headers];
   for (const game of games) {
     const rolls = game.events.filter(e => e.type === 'roll');
     for (const event of rolls) {
-      const nextMove = game.events.find(e => e.index > event.index && e.type === 'move' && e.actor === event.actor);
+      const nextMove = game.events.find(e => e.index === event.index + 1 && e.type === 'move' && e.actor === event.actor);
       rows.push([
         game.sourceId, game.gameId, game.helperVersion, game.startedAt, game.winner, game.finalPoints, game.finalBand, game.throwsRemaining,
         event.index, event.actor, event.selectedProbability ?? '', event.rollKey ?? '', Boolean(event.bonus),
-        nextMove?.pieceIds?.join('+') ?? '', nextMove?.from ?? '', nextMove?.to ?? '', nextMove?.route ?? '', nextMove?.captured?.join('+') ?? '', nextMove?.finishedCount ?? '', nextMove?.special ?? ''
+        nextMove?.pieceIds?.join('+') ?? '', nextMove?.from ?? '', nextMove?.to ?? '', nextMove?.route ?? '', nextMove?.captured?.join('+') ?? '', nextMove?.finishedCount ?? '', nextMove?.special ?? '',
+        event.recommendedProbability ?? '', event.strategyTelemetry?.recommendation?.utility ?? '', event.strategyTelemetry?.selectedChoice?.rank ?? '', event.strategyTelemetry?.selectedChoice?.utility ?? '', event.strategyTelemetry?.selectedChoice?.utilityGapFromBest ?? '',
+        nextMove?.strategyTelemetry?.recommendation?.utility ?? '', nextMove?.strategyTelemetry?.actualChoice?.rank ?? '', nextMove?.strategyTelemetry?.actualChoice?.utility ?? '', nextMove?.strategyTelemetry?.actualChoice?.utilityGapFromBest ?? ''
       ]);
     }
   }

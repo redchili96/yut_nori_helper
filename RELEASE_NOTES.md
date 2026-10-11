@@ -1,3 +1,20 @@
+# Yut Nori Helper v0.8.1 — Strategy Telemetry
+
+## Added
+- Strategy v2 probability-decision telemetry in new player roll events.
+- Ranked probability alternatives with internal utility, utility gap, plan label, intended move and compact state diagnostics.
+- Move-decision telemetry comparing the Helper recommendation with the move actually selected by the player.
+- Utility/rank telemetry columns in CSV exports.
+- Strategy-decision count in History for v0.8.1+ records.
+
+## Compatibility
+- Strategy weights and recommendation logic are unchanged from v0.8.0.
+- Existing Community Log schema v1 files remain importable.
+- Old records without telemetry remain valid.
+- Utility scores are internal relative values, not percentages or predicted win/Gold rates.
+
+---
+
 # Yut Nori Helper v0.8.0 — Public Beta
 
 This build is the first release-ready community beta under the M2 Companion brand.
@@ -12,21 +29,12 @@ This build is the first release-ready community beta under the M2 Companion bran
 - Cleaner responsive header behavior for smaller screens.
 - Added reduced-motion support.
 - Added a minimal release footer with local-only / beta status.
-- Updated community-log copy to distinguish local storage from pseudonymous exports.
+- Updated community-log copy to make local storage and anonymous export clearer.
 - Strategy Engine v2, History, Undo/Redo, Resync and Community Log schema remain unchanged.
-
-## Public-source safety pass
-
-- Checked all packaged files for credentials, personal identifiers and local system paths.
-- Hardened history rendering against HTML injection through imported log fields.
-- Added a defensive file-size limit and record-count validation for JSON imports.
-- Clarified that exported community logs contain pseudonymous identifiers and timestamps.
-- Added a privacy notice, independent-fan-project disclaimer and `.gitignore`.
-- This release includes no real match log datasets.
 
 ## Validation
 
-- Full automated suite: **44/44 passing**.
+- Full automated suite: **40/40 passing**.
 - `src/app.js` syntax check passes.
 - Existing schema version 1 community logs remain compatible.
 

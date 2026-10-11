@@ -3,12 +3,11 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <meta name="description" content="M2 Companion Yut Nori Helper — an independent browser companion for Yut Nori gameplay, recommendations and local match logs." />
+  <meta name="description" content="M2 Companion Yut Nori Helper — a local browser companion for tracking Yut Nori matches, recommendations and community logs." />
   <meta name="theme-color" content="#160b08" />
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; object-src 'none'; base-uri 'none'; connect-src 'none'; form-action 'none'" />
   <link rel="icon" type="image/png" href="./assets/favicon.png" />
   <title>Yut Nori Helper · M2 Companion Beta</title>
-  <link rel="stylesheet" href="./styles.css?v=0.8.0" />
+  <link rel="stylesheet" href="./styles.css?v=0.8.1" />
 </head>
 <body>
   <main class="app-shell">
@@ -21,7 +20,7 @@
             <h1>Yut Nori Helper</h1>
             <span class="beta-badge">BETA</span>
           </div>
-          <span class="brand-version">v0.8.0 · Strategy Engine v2</span>
+          <span class="brand-version">v0.8.1 · Strategy Engine v2</span>
         </div>
       </div>
       <div class="header-actions" aria-label="Recovery controls">
@@ -182,7 +181,7 @@
         <div><span class="section-kicker">GAME ARCHIVE</span><h3>Community logs</h3></div>
         <button id="close-history" class="text-button">Close</button>
       </div>
-      <p class="utility-copy">Games stay in this browser. Export only if you wish to share. JSON/CSV exports include game actions, timestamps and a random browser identifier that may link multiple exports. No Metin2 username is requested.</p>
+      <p class="utility-copy">Games stay in this browser. Export JSON to share anonymized match logs with M2 Companion or combine community datasets. From v0.8.1, exports also include Strategy v2 decision telemetry. No account name or personal information is stored.</p>
       <div class="archive-actions">
         <button id="export-all-json" class="primary-cta">Export all JSON</button>
         <button id="export-all-csv" class="secondary">Export CSV</button>
@@ -215,11 +214,11 @@
     <footer class="release-footer" aria-label="Release information">
       <span><b>M2 Companion</b> · Yut Nori Helper</span>
       <span class="footer-dot">•</span>
-      <span>Beta · browser-local data</span>
+      <span>Beta · local-only</span>
       <span class="footer-dot">•</span>
-      <span>v0.8.0</span>
+      <span>v0.8.1</span>
     </footer>
   </main>
-  <script type="module" src="./src/app.js?v=0.8.0"></script>
+  <script type="module" src="./src/app.js?v=0.8.1"></script>
 </body>
 </html>

@@ -449,6 +449,143 @@ function classifyOpeningPlan(game, row, model) {
   return { key: 'PROGRESS', label: 'Positioning', explanation: 'Best expected multi-turn balance of reward score, safety and progress.' };
 }
 
+function telemetryNumber(value, digits = 2) {
+  if (!Number.isFinite(value)) return null;
+  const factor = 10 ** digits;
+  return Math.round(value * factor) / factor;
+}
+
+function telemetryMove(move) {
+  if (!move) return null;
+  return {
+    pieceIds: [...move.pieceIds],
+    from: move.from,
+    to: move.to,
+    route: move.route,
+    special: move.special ?? null
+  };
+}
+
+function telemetryStateDiagnostics(game, actor = 'player', model = getProbabilityModel()) {
+  const threat = captureThreat(game, actor, model);
+  return {
+    points: game.points,
+    rewardBand: scoreBand(game.points),
+    projectedRewardPoints: telemetryNumber(projectedRewardPoints(game)),
+    goldPotentialProxy: telemetryNumber(goldPotential(game), 4),
+    winPotentialProxy: telemetryNumber(winPotential(game), 4),
+    estimatedThrowsToFinish: telemetryNumber(estimatedThrowsToFinish(game, actor)),
+    immediateCaptureRisk: telemetryNumber(threat.weightedRisk, 4),
+    stackAtRisk: Boolean(threat.stackAtRisk),
+    playerFinished: game.player.filter(p => p.finished).length,
+    computerFinished: game.computer.filter(p => p.finished).length
+  };
+}
+
+/**
+ * Serialize the already-computed Strategy v2 probability recommendation into a
+ * compact, analysis-friendly snapshot. Utilities are internal relative scores,
+ * never probabilities or predicted win rates. This function does not influence
+ * recommendation ranking.
+ */
+export function buildRollTelemetry(game, recommendation = recommendRoll(game, 'player'), selectedProbability = null) {
+  if (!recommendation?.best) return null;
+  const model = getProbabilityModel();
+  const bestValue = recommendation.best.value;
+  const alternatives = recommendation.alternatives.map((row, index) => {
+    const intended = row.details?.outcomes?.find(outcome => outcome.actualRoll === row.rollKey);
+    const after = intended?.bestAfter ?? null;
+    return {
+      rank: index + 1,
+      rollKey: row.rollKey,
+      utility: telemetryNumber(row.value),
+      utilityGapFromBest: telemetryNumber(bestValue - row.value),
+      plan: row.plan ? { key: row.plan.key, label: row.plan.label } : null,
+      reason: row.reason,
+      intendedMove: telemetryMove(row.bestMove),
+      intendedState: after ? telemetryStateDiagnostics(after, 'player', model) : null
+    };
+  });
+  const chosen = selectedProbability ? alternatives.find(row => row.rollKey === selectedProbability) ?? null : null;
+
+  return {
+    kind: 'probability-decision',
+    engineVersion: recommendation.version ?? 'v2',
+    horizon: recommendation.horizon ?? SEARCH_DEPTH,
+    utilityScale: 'internal-relative-not-percentage',
+    probabilityModel: { ...recommendation.probabilityModel },
+    recommendation: {
+      rollKey: recommendation.best.rollKey,
+      utility: telemetryNumber(recommendation.best.value),
+      plan: recommendation.best.plan ? { key: recommendation.best.plan.key, label: recommendation.best.plan.label } : null,
+      reason: recommendation.best.reason
+    },
+    selectedChoice: chosen ? {
+      rollKey: chosen.rollKey,
+      rank: chosen.rank,
+      utility: chosen.utility,
+      utilityGapFromBest: chosen.utilityGapFromBest
+    } : null,
+    alternatives
+  };
+}
+
+/**
+ * Serialize a move recommendation and the player's actual choice before the
+ * move is applied. This lets later analysis compare Helper vs player decisions
+ * without changing Strategy v2 itself.
+ */
+export function buildMoveTelemetry(game, recommendation = recommendMove(game, 'player'), actualMove = null) {
+  if (!recommendation?.alternatives?.length) return null;
+  const model = getProbabilityModel();
+  const bestValue = recommendation.alternatives[0].value;
+  const alternatives = recommendation.alternatives.map((row, index) => {
+    const after = cloneGame(game);
+    applyMove(after, row.move);
+    return {
+      rank: index + 1,
+      move: telemetryMove(row.move),
+      utility: telemetryNumber(row.value),
+      utilityGapFromBest: telemetryNumber(bestValue - row.value),
+      reasons: [...(row.reasons ?? [])],
+      facts: row.facts ? {
+        captured: row.facts.captured,
+        finished: row.facts.finished,
+        formedStack: Boolean(row.facts.formedStack),
+        movedStack: Boolean(row.facts.movedStack),
+        shortcut: Boolean(row.facts.shortcut),
+        remaining: row.facts.remaining
+      } : null,
+      resultingState: telemetryStateDiagnostics(after, 'player', model)
+    };
+  });
+  const actual = actualMove ? alternatives.find(row => {
+    const move = row.move;
+    return move.from === actualMove.from && move.to === actualMove.to && move.route === actualMove.route
+      && move.pieceIds.join('+') === actualMove.pieceIds.join('+');
+  }) ?? null : null;
+
+  return {
+    kind: 'move-decision',
+    engineVersion: recommendation.version ?? 'v2',
+    horizon: MOVE_SEARCH_DEPTH,
+    utilityScale: 'internal-relative-not-percentage',
+    equivalentBest: Boolean(recommendation.equivalent),
+    recommendation: {
+      move: telemetryMove(recommendation.best?.move ?? null),
+      utility: telemetryNumber(recommendation.best?.value),
+      reason: recommendation.reason
+    },
+    actualChoice: actual ? {
+      move: actual.move,
+      rank: actual.rank,
+      utility: actual.utility,
+      utilityGapFromBest: actual.utilityGapFromBest
+    } : null,
+    alternatives
+  };
+}
+
 export function evaluateOpeningPlans(game, actor = 'player', model = getProbabilityModel()) {
   if (actor !== 'player' || !isOpeningState(game)) return [];
   const memo = new Map();

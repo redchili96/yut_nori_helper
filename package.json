@@ -1,6 +1,6 @@
 {
-  "name": "m2companion-yut-nori-helper",
-  "version": "0.8.0",
+  "name": "yut-nori-helper-mvp",
+  "version": "0.8.1",
   "private": true,
   "type": "module",
   "scripts": {
