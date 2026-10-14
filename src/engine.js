@@ -129,6 +129,27 @@ export function legalMoves(game, actor, rollKey) {
   return moves;
 }
 
+export function observedMoveCandidates(game, actor, pieceIds, targetNode = null) {
+  if (game.phase !== 'PLAYING' || game.winner) return [];
+  if (!['player', 'computer'].includes(actor)) return [];
+  const wanted = [...pieceIds].sort().join('+');
+  const candidates = [];
+  const seen = new Set();
+
+  for (const rollKey of Object.keys(ROLLS)) {
+    for (const move of legalMoves(game, actor, rollKey)) {
+      const ids = [...move.pieceIds].sort().join('+');
+      if (ids !== wanted) continue;
+      if (targetNode && move.to !== targetNode) continue;
+      const key = `${rollKey}:${move.from}:${move.to}:${move.route}:${ids}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      candidates.push({ rollKey, move });
+    }
+  }
+  return candidates;
+}
+
 function piecesAt(pieces, node) {
   return pieces.filter(p => !p.finished && p.node === node);
 }
@@ -144,7 +165,7 @@ function resetHome(piece) {
   piece.finished = false;
 }
 
-export function applyRoll(game, actor, rollKey, { bonus = game.bonusThrow, selectedProbability = null, recommendedProbability = null, strategyTelemetry = null } = {}) {
+export function applyRoll(game, actor, rollKey, { bonus = game.bonusThrow, selectedProbability = null, recommendedProbability = null, strategyTelemetry = null, inputMethod = null } = {}) {
   if (game.phase !== 'PLAYING') throw new Error('Complete the initial toss first.');
   if (game.winner) return game;
   if (game.turn !== actor) throw new Error(`It is ${game.turn}'s turn, not ${actor}'s.`);
@@ -158,7 +179,7 @@ export function applyRoll(game, actor, rollKey, { bonus = game.bonusThrow, selec
 
   game.bonusThrow = false;
   game.pendingRoll = { actor, rollKey, bonus, grantsBonus: Boolean(roll.bonus) };
-  game.log.unshift({ type: 'roll', actor, rollKey, bonus, selectedProbability: actor === 'player' ? selectedProbability : null, recommendedProbability: actor === 'player' ? recommendedProbability : null, strategyTelemetry: actor === 'player' ? strategyTelemetry : null });
+  game.log.unshift({ type: 'roll', actor, rollKey, bonus, selectedProbability: actor === 'player' ? selectedProbability : null, recommendedProbability: actor === 'player' ? recommendedProbability : null, strategyTelemetry: actor === 'player' ? strategyTelemetry : null, inputMethod });
   return game;
 }
 
@@ -203,7 +224,8 @@ export function applyMove(game, move, metadata = {}) {
     route: move.route, captured: captured.map(p => p.id), finishedCount,
     special: move.special ?? null,
     recommendedMove: metadata.recommendedMove ?? null,
-    strategyTelemetry: actor === 'player' ? metadata.strategyTelemetry ?? null : null
+    strategyTelemetry: actor === 'player' ? metadata.strategyTelemetry ?? null : null,
+    inputMethod: metadata.inputMethod ?? null
   });
   game.pendingRoll = null;
 
