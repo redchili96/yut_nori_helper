@@ -113,3 +113,17 @@ test('CSV does not attach a later-turn move to a roll that had no legal movement
   assert.ok(firstPlayerRoll);
   assert.doesNotMatch(firstPlayerRoll, /P1/);
 });
+
+
+test('CSV records interactive-board input method for inferred moves', () => {
+  const csv = archiveToCsv([{
+    sourceId:'s1', gameId:'interactive', helperVersion:'0.9.0', startedAt:'x', winner:null, finalPoints:240,
+    finalBand:'Gold', throwsRemaining:19,
+    events:[
+      {index:1,type:'roll',actor:'player',inputMethod:'interactive-board',selectedProbability:'DO',rollKey:'GEOL',bonus:false},
+      {index:2,type:'move',actor:'player',inputMethod:'interactive-board',pieceIds:['P1'],from:'HOME',to:'O3',route:'OUTER',captured:[],finishedCount:0}
+    ]
+  }]);
+  assert.match(csv, /inputMethod/);
+  assert.match(csv, /player,interactive-board,DO,GEOL/);
+});

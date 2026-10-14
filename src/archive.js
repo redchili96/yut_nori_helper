@@ -112,7 +112,7 @@ export function mergeBundle(existingGames, bundle) {
 export function archiveToCsv(games) {
   const headers = [
     'sourceId','gameId','helperVersion','startedAt','winner','finalPoints','finalBand','throwsRemaining',
-    'eventIndex','actor','selectedProbability','actualRoll','bonus','pieceIds','from','to','route','captured','finishedCount','special',
+    'eventIndex','actor','inputMethod','selectedProbability','actualRoll','bonus','pieceIds','from','to','route','captured','finishedCount','special',
     'recommendedProbability','recommendedProbabilityUtility','selectedProbabilityRank','selectedProbabilityUtility','probabilityUtilityGap','recommendedMoveUtility','actualMoveRank','actualMoveUtility','moveUtilityGap'
   ];
   const esc = value => {
@@ -126,7 +126,7 @@ export function archiveToCsv(games) {
       const nextMove = game.events.find(e => e.index === event.index + 1 && e.type === 'move' && e.actor === event.actor);
       rows.push([
         game.sourceId, game.gameId, game.helperVersion, game.startedAt, game.winner, game.finalPoints, game.finalBand, game.throwsRemaining,
-        event.index, event.actor, event.selectedProbability ?? '', event.rollKey ?? '', Boolean(event.bonus),
+        event.index, event.actor, event.inputMethod ?? nextMove?.inputMethod ?? '', event.selectedProbability ?? '', event.rollKey ?? '', Boolean(event.bonus),
         nextMove?.pieceIds?.join('+') ?? '', nextMove?.from ?? '', nextMove?.to ?? '', nextMove?.route ?? '', nextMove?.captured?.join('+') ?? '', nextMove?.finishedCount ?? '', nextMove?.special ?? '',
         event.recommendedProbability ?? '', event.strategyTelemetry?.recommendation?.utility ?? '', event.strategyTelemetry?.selectedChoice?.rank ?? '', event.strategyTelemetry?.selectedChoice?.utility ?? '', event.strategyTelemetry?.selectedChoice?.utilityGapFromBest ?? '',
         nextMove?.strategyTelemetry?.recommendation?.utility ?? '', nextMove?.strategyTelemetry?.actualChoice?.rank ?? '', nextMove?.strategyTelemetry?.actualChoice?.utility ?? '', nextMove?.strategyTelemetry?.actualChoice?.utilityGapFromBest ?? ''

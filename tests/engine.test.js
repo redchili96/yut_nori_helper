@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createGame, startGame, legalMoves, applyRoll, applyMove } from '../src/engine.js';
+import { createGame, startGame, legalMoves, applyRoll, applyMove, observedMoveCandidates } from '../src/engine.js';
 
 function readyGame(starter = 'player') {
   const g = createGame();
@@ -218,4 +218,60 @@ test('observed regression: forward movement from O10 is forced onto the top-left
   assert.equal(moves[0].route, 'TL_TO_FINISH');
   assert.equal(moves[0].to, 'TL2');
   assert.equal(moves.some(m => m.route === 'OUTER' || m.to === 'O12'), false);
+});
+
+
+test('interactive board infers a unique CPU Geol move from O2 to O5', () => {
+  const g = readyGame('computer');
+  g.computer[0].node = 'O2';
+  const candidates = observedMoveCandidates(g, 'computer', ['C1'], 'O5');
+  assert.equal(candidates.length, 1);
+  assert.equal(candidates[0].rollKey, 'GEOL');
+  assert.equal(candidates[0].move.from, 'O2');
+  assert.equal(candidates[0].move.to, 'O5');
+});
+
+test('interactive board infers stacked movement as one move', () => {
+  const g = readyGame('computer');
+  g.computer[0].node = 'O2';
+  g.computer[1].node = 'O2';
+  const candidates = observedMoveCandidates(g, 'computer', ['C1', 'C2'], 'O5');
+  assert.equal(candidates.length, 1);
+  assert.equal(candidates[0].rollKey, 'GEOL');
+  assert.deepEqual([...candidates[0].move.pieceIds].sort(), ['C1', 'C2']);
+});
+
+test('interactive board infers O1 to Finish as Back Do', () => {
+  const g = readyGame();
+  g.player[0].node = 'O1';
+  const candidates = observedMoveCandidates(g, 'player', ['P1'], 'FINISH');
+  assert.equal(candidates.length, 1);
+  assert.equal(candidates[0].rollKey, 'BACK_DO');
+  assert.equal(candidates[0].move.special, 'FIRST_NODE_BACK_DO_FINISH');
+});
+
+test('interactive board reports ambiguity when several rolls can cross Finish', () => {
+  const g = readyGame();
+  g.player[0].node = 'O18';
+  g.player[0].route = 'OUTER';
+  const candidates = observedMoveCandidates(g, 'player', ['P1'], 'FINISH');
+  assert.deepEqual(candidates.map(c => c.rollKey), ['GAE', 'GEOL', 'YUT', 'MO']);
+});
+
+test('interactive board can infer a HOME piece placement', () => {
+  const g = readyGame();
+  const candidates = observedMoveCandidates(g, 'player', ['P1'], 'O3');
+  assert.equal(candidates.length, 1);
+  assert.equal(candidates[0].rollKey, 'GEOL');
+});
+
+test('interactive-board input method is preserved in roll and move logs', () => {
+  const g = readyGame();
+  const candidate = observedMoveCandidates(g, 'player', ['P1'], 'O2')[0];
+  applyRoll(g, 'player', candidate.rollKey, { inputMethod: 'interactive-board' });
+  applyMove(g, candidate.move, { inputMethod: 'interactive-board' });
+  assert.equal(g.log[0].type, 'move');
+  assert.equal(g.log[0].inputMethod, 'interactive-board');
+  assert.equal(g.log[1].type, 'roll');
+  assert.equal(g.log[1].inputMethod, 'interactive-board');
 });

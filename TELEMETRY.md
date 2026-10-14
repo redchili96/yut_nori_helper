@@ -40,3 +40,8 @@ Diagnostics may include projected reward points, Gold-potential proxy, win-poten
 ## Compatibility
 
 The Community Log schema remains version 1. Telemetry is optional, so v0.8.0 and older schema-v1 records remain valid and importable.
+
+
+## Input method — v0.9.0
+
+Roll and move events may also include `inputMethod`. Interactive-board actions use `"interactive-board"`; the legacy controls use `"buttons"`. This does not affect Strategy Engine scoring. It allows later analysis to distinguish inferred board transitions from manually recorded roll/move events.

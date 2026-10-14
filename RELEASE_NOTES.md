@@ -1,3 +1,28 @@
+# Yut Nori Helper v0.9.0 — Interactive Board
+
+## Added
+- Click-to-move workflow: select the active piece, then choose a highlighted legal destination.
+- Pointer drag for pieces already visible on the board.
+- HOME-piece selection through the Player / Computer chips below the board.
+- Rules-engine movement inference across Do, Gae, Geol, Yut, Mo and Back Do.
+- Automatic roll logging when a board transition has one unique explanation.
+- Compact ambiguity prompt when several rolls/routes can reach the same destination.
+- Interactive-board input metadata in JSON/CSV community logs.
+- Dedicated regression coverage for inferred CPU moves, stacks, Back Do → Finish and Finish-overrun ambiguity.
+
+## Preserved
+- Strategy Engine v2 recommendations and weights are unchanged.
+- Strategy Telemetry remains active for player decisions.
+- Existing roll/movement buttons remain available as fallback.
+- Undo, Redo, Resync, History and schema-v1 Community Logs remain compatible.
+
+## Known limitations
+- The board infers one observed roll/move at a time; it does not reconstruct several missed CPU turns from a final position. Use Resync if the live client moved too quickly.
+- Back Do from HOME has no movement to drag, so it still uses the result button + pass flow.
+- When several throws can legally cross Finish, the user must identify the actual result shown in Metin2.
+
+---
+
 # Yut Nori Helper v0.8.1 — Strategy Telemetry
 
 ## Added

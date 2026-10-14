@@ -1,4 +1,4 @@
-# M2 Companion — Yut Nori Helper v0.8.1 (Beta)
+# M2 Companion — Yut Nori Helper v0.9.0 (Beta)
 
 Manual-state browser helper for the 2026 Gameforge Metin2 Yut Nori event.
 
@@ -9,6 +9,21 @@ python -m http.server 8080
 ```
 
 Open `http://localhost:8080`.
+
+## Interactive Board — v0.9.0
+
+The board can now be used as the primary match input instead of recording every roll and movement through buttons.
+
+- Click a piece, then click one of the highlighted legal destinations.
+- Drag an on-board piece directly to the position shown in Metin2.
+- Pieces at HOME can be selected from the Player / Computer chips below the board.
+- When the movement maps to one unique roll, the Helper infers and records that roll automatically.
+- When several rolls can lead to the same destination (for example, crossing Finish), a compact confirmation asks which result actually appeared.
+- Captures, stacks, shortcuts, Finish, Yut/Mo bonus turns, points and Throws continue to use the existing Rules Engine.
+- The existing roll and movement buttons remain available as a fallback.
+- Interactive-board events are marked in exported logs with `inputMethod: "interactive-board"`.
+
+A one-roll movement must be inferable from the current state. If a CPU sequence happened too quickly or multiple moves were missed, use **Resync** rather than forcing an inferred path.
 
 ## Strategy Engine v2
 
@@ -105,3 +120,8 @@ This build can be hosted as a static website. Upload the contents of the project
 This release keeps Strategy Engine v2 decision-making unchanged and enriches new match logs with decision telemetry for later analysis. Player probability decisions now store the ranked Strategy v2 alternatives, internal utility values, utility gaps, opening-plan labels, intended moves, and state diagnostics. Player move events store the ranked legal alternatives, the Helper recommendation, the actual move chosen, and the model utility gap.
 
 The utility values are internal relative scores, not predicted win rates or percentages. Existing schema-v1 community logs remain compatible; telemetry is optional and is only present in games recorded with v0.8.1 or later. CSV exports include the key telemetry ranks, utilities, and gaps, while JSON exports contain the richer decision snapshots.
+
+
+## v0.9.0 — Interactive Board
+
+The board is now an input surface. Click or drag the active piece to mirror Metin2 and the Helper will infer the observed roll whenever the transition is unique. Ambiguous Finish/route cases require explicit confirmation. Existing button input, Undo/Redo, Resync, Strategy v2 and Strategy Telemetry remain available.
