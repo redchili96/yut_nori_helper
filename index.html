@@ -7,7 +7,7 @@
   <meta name="theme-color" content="#160b08" />
   <link rel="icon" type="image/png" href="./assets/favicon.png" />
   <title>Yut Nori Helper · M2 Companion Beta</title>
-  <link rel="stylesheet" href="./styles.css?v=0.8.1" />
+  <link rel="stylesheet" href="./styles.css?v=0.9.0" />
 </head>
 <body>
   <main class="app-shell">
@@ -20,7 +20,7 @@
             <h1>Yut Nori Helper</h1>
             <span class="beta-badge">BETA</span>
           </div>
-          <span class="brand-version">v0.8.1 · Strategy Engine v2</span>
+          <span class="brand-version">v0.9.0 · Interactive Board</span>
         </div>
       </div>
       <div class="header-actions" aria-label="Recovery controls">
@@ -42,7 +42,16 @@
 
       <div class="metin-main">
         <section class="board-stage" aria-label="Current board">
-          <svg id="board" viewBox="0 0 800 800" aria-label="Yut Nori board"></svg>
+          <svg id="board" viewBox="0 0 800 800" aria-label="Interactive Yut Nori board"></svg>
+          <div id="board-inference" class="board-inference hidden" role="dialog" aria-live="polite" aria-label="Movement inference">
+            <div class="board-inference-copy">
+              <span class="section-kicker">MOVEMENT DETECTED</span>
+              <strong id="board-inference-title">Choose the roll</strong>
+              <span id="board-inference-text"></span>
+            </div>
+            <div id="board-inference-options" class="board-inference-options"></div>
+            <button id="board-inference-cancel" type="button" class="text-button">Cancel</button>
+          </div>
         </section>
 
         <aside class="control-panel">
@@ -123,9 +132,9 @@
 
       <div class="piece-dock" aria-label="Pieces">
         <div class="team-dock player-team">
-          <div class="piece-chips" aria-hidden="true">
-            <span id="player-chip-1" class="dock-piece player">1</span>
-            <span id="player-chip-2" class="dock-piece player">2</span>
+          <div class="piece-chips">
+            <span id="player-chip-1" class="dock-piece player" role="button" tabindex="0" aria-label="Player piece 1">1</span>
+            <span id="player-chip-2" class="dock-piece player" role="button" tabindex="0" aria-label="Player piece 2">2</span>
           </div>
           <div class="team-label"><strong>Player</strong><span id="player-state">P1: HOME · P2: HOME</span></div>
           <span id="player-finished" class="finish-count">0/2</span>
@@ -137,9 +146,9 @@
         </div>
 
         <div class="team-dock cpu-team">
-          <div class="piece-chips" aria-hidden="true">
-            <span id="cpu-chip-1" class="dock-piece cpu">1</span>
-            <span id="cpu-chip-2" class="dock-piece cpu">2</span>
+          <div class="piece-chips">
+            <span id="cpu-chip-1" class="dock-piece cpu" role="button" tabindex="0" aria-label="Computer piece 1">1</span>
+            <span id="cpu-chip-2" class="dock-piece cpu" role="button" tabindex="0" aria-label="Computer piece 2">2</span>
           </div>
           <div class="team-label"><strong>Computer</strong><span id="cpu-state">C1: HOME · C2: HOME</span></div>
           <span id="cpu-finished" class="finish-count">0/2</span>
@@ -216,9 +225,9 @@
       <span class="footer-dot">•</span>
       <span>Beta · local-only</span>
       <span class="footer-dot">•</span>
-      <span>v0.8.1</span>
+      <span>v0.9.0</span>
     </footer>
   </main>
-  <script type="module" src="./src/app.js?v=0.8.1"></script>
+  <script type="module" src="./src/app.js?v=0.9.0"></script>
 </body>
 </html>
