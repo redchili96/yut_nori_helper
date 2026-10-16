@@ -242,3 +242,77 @@ test('move telemetry records the player actual choice and model utility gap', ()
   assert.ok(telemetry.alternatives.every(row => typeof row.utility === 'number'));
   assert.ok(telemetry.alternatives.every(row => row.resultingState));
 });
+
+test('v0.9.1 avoids a dangerous O2 stack when a safer Gae move exists', async () => {
+  const { configureProbabilityModel } = await import('../src/probabilities.js');
+  const events = [];
+  const baselineCounts = { BACK_DO: 2, DO: 5, GAE: 27, GEOL: 14, YUT: 4, MO: 5 };
+  for (const [rollKey, count] of Object.entries(baselineCounts)) {
+    for (let i = 0; i < count; i += 1) events.push({ type: 'roll', actor: 'computer', rollKey });
+  }
+  configureProbabilityModel([{ events }], { minCommunityCpuRolls: 0, minCommunitySelectedRolls: 0 });
+
+  const g = playing();
+  g.points = 230;
+  g.throws = 17;
+  g.player[0].node = 'O2';
+  g.player[0].route = 'OUTER';
+  g.computer[0].node = 'O3';
+  g.computer[0].route = 'OUTER';
+  applyRoll(g, 'player', 'GAE');
+
+  const rec = recommendMove(g, 'player');
+  assert.equal(rec.best.move.pieceIds.join('+'), 'P1');
+  assert.equal(rec.best.move.to, 'O4');
+  const stack = rec.alternatives.find(row => row.move.pieceIds.join('+') === 'P2' && row.move.to === 'O2');
+  assert.ok(stack);
+  assert.equal(stack.facts.formedStack, true);
+  assert.match(stack.reasons.join(' '), /stack is exposed/i);
+  assert.ok(rec.best.value > stack.value);
+
+  configureProbabilityModel([]);
+});
+
+test('v0.9.1 does not let utility collapse default the probability recommendation to Back Do', async () => {
+  const { configureProbabilityModel } = await import('../src/probabilities.js');
+  const events = [];
+  const keys = ['BACK_DO','DO','GAE','GEOL','YUT','MO'];
+  const baselineCounts = { BACK_DO: 2, DO: 5, GAE: 27, GEOL: 14, YUT: 4, MO: 5 };
+  for (const [rollKey, count] of Object.entries(baselineCounts)) {
+    for (let i = 0; i < count; i += 1) events.push({ type: 'roll', actor: 'computer', rollKey });
+  }
+  for (let i = 0; i < 60; i += 1) {
+    events.push({ type: 'roll', actor: 'player', selectedProbability: keys[i % 6], rollKey: keys[(i + 1) % 6] });
+  }
+  const model = configureProbabilityModel([{ events }], { minCommunityCpuRolls: 0, minCommunitySelectedRolls: 0 });
+  assert.equal(model.selectionMultiplier, 1);
+
+  const g = playing();
+  g.points = 150;
+  g.throws = 10;
+  g.computer[1].node = 'O3';
+  g.computer[1].route = 'OUTER';
+  const rec = recommendRoll(g, 'player');
+  const uniqueUtilities = new Set(rec.alternatives.map(row => row.value.toFixed(6)));
+  assert.equal(uniqueUtilities.size, 1); // calibrated selection effect is genuinely collapsed
+  assert.notEqual(rec.best.rollKey, 'BACK_DO');
+  assert.ok(rec.best.targetDiagnostics.winChance >= rec.alternatives.at(-1).targetDiagnostics.winChance);
+
+  configureProbabilityModel([]);
+});
+
+test('v0.9.1 Gold estimate stays graded near the threshold instead of collapsing to a binary proxy', () => {
+  const high = playing();
+  high.points = 250;
+  const mid = playing();
+  mid.points = 230;
+  const low = playing();
+  low.points = 210;
+
+  const highChance = __strategyInternals.goldChanceEstimate(high);
+  const midChance = __strategyInternals.goldChanceEstimate(mid);
+  const lowChance = __strategyInternals.goldChanceEstimate(low);
+  assert.ok(highChance > midChance);
+  assert.ok(midChance > lowChance);
+  assert.ok(highChance > 0 && highChance < 1);
+});

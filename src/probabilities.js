@@ -26,11 +26,12 @@ const SEED_SELECTED_COUNTS = {
 
 export const DEFAULT_PROBABILITY_CONFIG = Object.freeze({
   // The selected option is modelled as a common multiplicative lift on its
-  // base probability. The lift is fitted from observed selected->actual rolls.
-  // This common-lift assumption is intentionally simpler than fitting six
-  // separate modifiers from a sparse dataset.
-  minSelectionMultiplier: 1,
-  maxSelectionMultiplier: 4,
+  // base probability. v0.9.1 deliberately shrinks this effect toward 1.0
+  // until substantially more selected-roll evidence exists. This prevents a
+  // sparse/noisy archive from creating overconfident probability advice.
+  minRawSelectionMultiplier: 0.5,
+  maxRawSelectionMultiplier: 4,
+  selectionEvidenceHalfLife: 180,
   minCommunityCpuRolls: 40,
   minCommunitySelectedRolls: 30
 });
@@ -102,8 +103,8 @@ function selectionLogLikelihood(baseline, selectedCounts, multiplier) {
 }
 
 function fitSelectionMultiplier(baseline, selectedCounts, config) {
-  const lo = Math.max(0.05, config.minSelectionMultiplier);
-  const hi = Math.max(lo, config.maxSelectionMultiplier);
+  const lo = Math.max(0.05, config.minRawSelectionMultiplier);
+  const hi = Math.max(lo, config.maxRawSelectionMultiplier);
   let best = lo;
   let bestLl = -Infinity;
 
@@ -141,25 +142,42 @@ export function buildProbabilityModel(games = [], config = {}) {
   const baselineCounts = useCommunity ? observed.baselineCounts : { ...SEED_BASELINE_COUNTS };
   const selectedCounts = useCommunity ? observed.selectedCounts : structuredClone(SEED_SELECTED_COUNTS);
   const baseline = normalize(baselineCounts);
-  const selectionMultiplier = fitSelectionMultiplier(baseline, selectedCounts, cfg);
+  const rawSelectionMultiplier = fitSelectionMultiplier(baseline, selectedCounts, cfg);
+  const selectedPlayerRolls = useCommunity
+    ? observed.selectedPlayerRolls
+    : Object.values(SEED_SELECTED_COUNTS).reduce((sum, row) => sum + totalCounts(row), 0);
+  const evidenceWeight = selectedPlayerRolls / (selectedPlayerRolls + Math.max(1, cfg.selectionEvidenceHalfLife));
+  // Never infer that selecting an option actively makes that option less likely.
+  // If the current sample points below 1.0, treat the effect as unproven instead.
+  const positiveLift = Math.max(0, rawSelectionMultiplier - 1);
+  const selectionMultiplier = 1 + positiveLift * evidenceWeight;
   const selected = Object.fromEntries(ROLL_KEYS.map(selectedKey => [
     selectedKey,
     selectedDistribution(baseline, selectedKey, selectionMultiplier)
   ]));
 
   const selectedByChoice = Object.fromEntries(ROLL_KEYS.map(key => [key, totalCounts(selectedCounts[key])]));
+  const choiceConfidence = Object.fromEntries(ROLL_KEYS.map(key => {
+    const n = selectedByChoice[key];
+    return [key, n / (n + 100)];
+  }));
+  const confidenceLevel = evidenceWeight < 0.33 ? 'low' : evidenceWeight < 0.67 ? 'medium' : 'high';
   return {
     source: useCommunity ? 'local/community archive' : '2026-10-11 provisional seed',
     observed: useCommunity,
     config: cfg,
     baseline,
     selected,
+    rawSelectionMultiplier,
     selectionMultiplier,
+    confidence: {
+      level: confidenceLevel,
+      evidenceWeight,
+      byChoice: choiceConfidence
+    },
     sample: {
       cpuRolls: useCommunity ? observed.cpuRolls : totalCounts(SEED_BASELINE_COUNTS),
-      selectedPlayerRolls: useCommunity
-        ? observed.selectedPlayerRolls
-        : Object.values(SEED_SELECTED_COUNTS).reduce((sum, row) => sum + totalCounts(row), 0),
+      selectedPlayerRolls,
       selectedByChoice
     }
   };

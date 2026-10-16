@@ -6,6 +6,11 @@ const SEARCH_DEPTH = 3;
 const MOVE_SEARCH_DEPTH = 2;
 const GOLD_THRESHOLD = 220;
 const EQUIVALENCE_TOLERANCE = 120;
+const GOLD_CHANCE_TOLERANCE = 0.0025;
+const WIN_CHANCE_TOLERANCE = 0.0075;
+const PROJECTED_POINTS_TOLERANCE = 1.5;
+const THROWS_TOLERANCE = 0.15;
+const CAPTURE_RISK_TOLERANCE = 0.015;
 
 // Recommendation-level caches avoid repeating the same depth-limited search several
 // times during one UI render (board highlight, recommendation card, click metadata).
@@ -20,7 +25,8 @@ function remember(cache, key, value) {
 }
 
 function probabilityModelKey(model) {
-  return `${model.source}:${model.sample.cpuRolls}:${model.sample.selectedPlayerRolls}:${model.selectionMultiplier.toFixed(4)}`;
+  const confidence = model.confidence?.evidenceWeight ?? 0;
+  return `${model.source}:${model.sample.cpuRolls}:${model.sample.selectedPlayerRolls}:${model.selectionMultiplier.toFixed(4)}:${confidence.toFixed(4)}`;
 }
 
 const STRATEGIC_NODE_BONUS = {
@@ -68,39 +74,66 @@ function groupedPieces(pieces) {
 function captureThreat(game, actor, model = getProbabilityModel()) {
   const opponent = opponentOf(actor);
   if (game.winner || game.turn !== opponent) {
-    return { weightedRisk: 0, exposedPieces: 0, stackAtRisk: false, outcomes: [] };
+    return {
+      weightedRisk: 0, exposedPieces: 0, stackAtRisk: false,
+      stackCaptureProbability: 0, expectedProgressLoss: 0, outcomes: []
+    };
   }
 
   const ownByNode = groupedPieces(game[actor]);
-  if (!ownByNode.size) return { weightedRisk: 0, exposedPieces: 0, stackAtRisk: false, outcomes: [] };
+  if (!ownByNode.size) {
+    return {
+      weightedRisk: 0, exposedPieces: 0, stackAtRisk: false,
+      stackCaptureProbability: 0, expectedProgressLoss: 0, outcomes: []
+    };
+  }
 
   const distribution = distributionFor(opponent, null, model);
   let weightedRisk = 0;
   let exposedPieces = 0;
   let stackAtRisk = false;
+  let stackCaptureProbability = 0;
+  let expectedProgressLoss = 0;
   const outcomes = [];
 
   for (const rollKey of ROLL_KEYS) {
     const probability = distribution[rollKey] ?? 0;
     if (!probability) continue;
     const moves = legalMoves(game, opponent, rollKey);
-    let bestCapture = 0;
-    let bestNode = null;
+    let best = null;
     for (const move of moves) {
       const targets = ownByNode.get(move.to) ?? [];
-      if (targets.length > bestCapture) {
-        bestCapture = targets.length;
-        bestNode = move.to;
+      if (!targets.length) continue;
+      const progressLoss = targets.reduce((sum, piece) => {
+        const routeProgress = Math.max(0, 20 - effectiveRemaining(piece));
+        const strategicProgress = (STRATEGIC_NODE_BONUS[piece.node] ?? 0) / 320;
+        const o1FinishExposure = piece.node === 'O1' ? 7 : 0;
+        return sum + routeProgress + strategicProgress + o1FinishExposure;
+      }, 0);
+      const damage = targets.length * 10 + progressLoss;
+      if (!best || damage > best.damage) {
+        best = { move, targets, progressLoss, damage };
       }
     }
-    if (!bestCapture) continue;
-    weightedRisk += bestCapture * probability;
-    exposedPieces = Math.max(exposedPieces, bestCapture);
-    stackAtRisk ||= bestCapture >= 2;
-    outcomes.push({ rollKey, probability, captured: bestCapture, node: bestNode });
+    if (!best) continue;
+    const captured = best.targets.length;
+    weightedRisk += captured * probability;
+    expectedProgressLoss += best.progressLoss * probability;
+    exposedPieces = Math.max(exposedPieces, captured);
+    if (captured >= 2) {
+      stackAtRisk = true;
+      stackCaptureProbability += probability;
+    }
+    outcomes.push({
+      rollKey, probability, captured, node: best.move.to,
+      progressLoss: best.progressLoss
+    });
   }
 
-  return { weightedRisk, exposedPieces, stackAtRisk, outcomes };
+  return {
+    weightedRisk, exposedPieces, stackAtRisk,
+    stackCaptureProbability, expectedProgressLoss, outcomes
+  };
 }
 
 function nextTurnCapturePotential(game, actor, model = getProbabilityModel()) {
@@ -161,11 +194,38 @@ function projectedRewardPoints(game) {
   return game.points + finishCredits - estimatedThrowCost;
 }
 
-function goldPotential(game) {
+function normalCdf(z) {
+  // Fast erf approximation; sufficient for a bounded heuristic estimate.
+  const sign = z < 0 ? -1 : 1;
+  const x = Math.abs(z) / Math.sqrt(2);
+  const t = 1 / (1 + 0.3275911 * x);
+  const a1 = 0.254829592;
+  const a2 = -0.284496736;
+  const a3 = 1.421413741;
+  const a4 = -1.453152027;
+  const a5 = 1.061405429;
+  const erf = sign * (1 - (((((a5 * t + a4) * t) + a3) * t + a2) * t + a1) * t * Math.exp(-x * x));
+  return 0.5 * (1 + erf);
+}
+
+function goldChanceEstimate(game) {
   if (game.winner) return game.winner === 'player' && game.points >= GOLD_THRESHOLD ? 1 : 0;
-  const projected = projectedRewardPoints(game);
-  // A bounded potential proxy, not a claimed probability. Search explanations never expose it as %.
-  return Math.max(0, Math.min(1, 0.5 + (projected - GOLD_THRESHOLD) / 80));
+
+  const unfinished = game.player.filter(piece => !piece.finished).length;
+  const finishCredits = unfinished * 10;
+  const paidThrowBudget = (game.points + finishCredits - GOLD_THRESHOLD) / 10;
+  if (paidThrowBudget < 0) return 0;
+
+  const meanPaidThrows = estimatedThrowsToFinish(game, 'player');
+  // Conservative uncertainty around the leaf estimate. Future capture points are
+  // intentionally excluded: they are upside, not guaranteed Gold budget.
+  const sigma = Math.max(1.2, meanPaidThrows * 0.4);
+  const z = (paidThrowBudget + 0.5 - meanPaidThrows) / sigma;
+  return Math.max(0, Math.min(1, normalCdf(z)));
+}
+
+function goldPotential(game) {
+  return goldChanceEstimate(game);
 }
 
 function winPotential(game) {
@@ -226,19 +286,24 @@ function boardValue(game, actor = 'player', model = getProbabilityModel()) {
   }
 
   const threat = captureThreat(game, actor, model);
-  value -= threat.weightedRisk * 4200;
-  if (threat.stackAtRisk) value -= 1200;
+  // Capture exposure is priced as expected reset damage, not merely the number
+  // of pieces on the target square. Losing a two-piece stack must hurt much more
+  // than losing one early piece.
+  value -= threat.weightedRisk * 5200;
+  value -= threat.expectedProgressLoss * 520;
+  value -= threat.stackCaptureProbability * 7200;
   value += nextTurnCapturePotential(game, actor, model) * 900;
 
   if (actor === 'player') {
-    // Gold preservation is the primary strategic objective. The projection deliberately
-    // assumes no future capture points; captures remain upside rather than guaranteed score.
+    // Gold remains the primary strategic objective, but avoid the old threshold
+    // cliff that could make a risky stack look artificially superior solely
+    // because it reduced the leaf throw estimate.
     const projected = projectedRewardPoints(game);
-    value += game.points * 55;
-    value += goldPotential(game) * 18_000;
-    value += winPotential(game) * 8_000;
-    if (projected >= GOLD_THRESHOLD) value += 5500 + (projected - GOLD_THRESHOLD) * 120;
-    else value -= (GOLD_THRESHOLD - projected) * 180;
+    const projectedMargin = Math.max(-120, Math.min(80, projected - GOLD_THRESHOLD));
+    value += game.points * 42;
+    value += goldChanceEstimate(game) * 26_000;
+    value += winPotential(game) * 10_000;
+    value += projectedMargin * 32;
   }
 
   if (game.turn === actor && game.bonusThrow) value += 1700;
@@ -347,6 +412,89 @@ function evaluatePlayerSelection(game, selectedProbability, depth, model, memo) 
     outcomes.push({ actualRoll, probability, ...result });
   }
   return { value: expected, selectedProbability, outcomes };
+}
+
+function stateDecisionDiagnostics(after, model) {
+  if (!after) {
+    return {
+      goldChance: 0,
+      winChance: 0,
+      projectedRewardPoints: -Infinity,
+      estimatedThrowsToFinish: Infinity,
+      captureRisk: Infinity
+    };
+  }
+  const threat = captureThreat(after, 'player', model);
+  return {
+    goldChance: goldChanceEstimate(after),
+    winChance: winPotential(after),
+    projectedRewardPoints: projectedRewardPoints(after),
+    estimatedThrowsToFinish: estimatedThrowsToFinish(after, 'player'),
+    captureRisk: threat.weightedRisk
+  };
+}
+
+function selectionDiagnostics(evaluated, model) {
+  const metrics = {
+    goldChance: 0,
+    winChance: 0,
+    projectedRewardPoints: 0,
+    estimatedThrowsToFinish: 0,
+    captureRisk: 0
+  };
+  for (const outcome of evaluated.outcomes ?? []) {
+    const p = outcome.probability ?? 0;
+    if (!p) continue;
+    const row = stateDecisionDiagnostics(outcome.bestAfter, model);
+    metrics.goldChance += p * row.goldChance;
+    metrics.winChance += p * row.winChance;
+    metrics.projectedRewardPoints += p * row.projectedRewardPoints;
+    metrics.estimatedThrowsToFinish += p * row.estimatedThrowsToFinish;
+    metrics.captureRisk += p * row.captureRisk;
+  }
+  return metrics;
+}
+
+function targetOutcomeDiagnostics(evaluated, rollKey, model) {
+  const intended = evaluated.outcomes?.find(outcome => outcome.actualRoll === rollKey);
+  return stateDecisionDiagnostics(intended?.bestAfter ?? null, model);
+}
+
+function compareDecisionMetrics(ad, bd) {
+  const goldDiff = bd.goldChance - ad.goldChance;
+  if (Math.abs(goldDiff) > GOLD_CHANCE_TOLERANCE) return goldDiff;
+
+  const winDiff = bd.winChance - ad.winChance;
+  if (Math.abs(winDiff) > WIN_CHANCE_TOLERANCE) return winDiff;
+
+  const projectedDiff = bd.projectedRewardPoints - ad.projectedRewardPoints;
+  if (Math.abs(projectedDiff) > PROJECTED_POINTS_TOLERANCE) return projectedDiff;
+
+  const throwsDiff = ad.estimatedThrowsToFinish - bd.estimatedThrowsToFinish;
+  if (Math.abs(throwsDiff) > THROWS_TOLERANCE) return throwsDiff;
+
+  const riskDiff = ad.captureRisk - bd.captureRisk;
+  if (Math.abs(riskDiff) > CAPTURE_RISK_TOLERANCE) return riskDiff;
+  return 0;
+}
+
+function compareRollRows(a, b) {
+  // Primary ranking: expected outcomes under the calibrated selection model.
+  const expectedDiff = compareDecisionMetrics(a.selectionDiagnostics, b.selectionDiagnostics);
+  if (expectedDiff) return expectedDiff;
+
+  // When the current data says selection has little/no measurable effect, every
+  // option can have identical expected utility. Do not let array order silently
+  // choose Back Do. Use the quality of the requested target line as an explicit,
+  // low-confidence secondary ordering for the UI selection that Metin2 requires.
+  const targetDiff = compareDecisionMetrics(a.targetDiagnostics, b.targetDiagnostics);
+  if (targetDiff) return targetDiff;
+
+  const valueDiff = b.value - a.value;
+  if (Math.abs(valueDiff) > 1e-6) return valueDiff;
+
+  // Stable final fallback only; this is never presented as probability evidence.
+  return ROLL_KEYS.indexOf(a.rollKey) - ROLL_KEYS.indexOf(b.rollKey);
 }
 
 function evaluateCpuChance(game, depth, model, memo) {
@@ -473,6 +621,7 @@ function telemetryStateDiagnostics(game, actor = 'player', model = getProbabilit
     rewardBand: scoreBand(game.points),
     projectedRewardPoints: telemetryNumber(projectedRewardPoints(game)),
     goldPotentialProxy: telemetryNumber(goldPotential(game), 4),
+    goldChanceEstimate: telemetryNumber(goldChanceEstimate(game), 4),
     winPotentialProxy: telemetryNumber(winPotential(game), 4),
     estimatedThrowsToFinish: telemetryNumber(estimatedThrowsToFinish(game, actor)),
     immediateCaptureRisk: telemetryNumber(threat.weightedRisk, 4),
@@ -502,6 +651,20 @@ export function buildRollTelemetry(game, recommendation = recommendRoll(game, 'p
       utilityGapFromBest: telemetryNumber(bestValue - row.value),
       plan: row.plan ? { key: row.plan.key, label: row.plan.label } : null,
       reason: row.reason,
+      decisionMetrics: row.selectionDiagnostics ? {
+        goldChanceEstimate: telemetryNumber(row.selectionDiagnostics.goldChance, 4),
+        winPotentialProxy: telemetryNumber(row.selectionDiagnostics.winChance, 4),
+        projectedRewardPoints: telemetryNumber(row.selectionDiagnostics.projectedRewardPoints),
+        estimatedThrowsToFinish: telemetryNumber(row.selectionDiagnostics.estimatedThrowsToFinish),
+        captureRisk: telemetryNumber(row.selectionDiagnostics.captureRisk, 4)
+      } : null,
+      targetLineMetrics: row.targetDiagnostics ? {
+        goldChanceEstimate: telemetryNumber(row.targetDiagnostics.goldChance, 4),
+        winPotentialProxy: telemetryNumber(row.targetDiagnostics.winChance, 4),
+        projectedRewardPoints: telemetryNumber(row.targetDiagnostics.projectedRewardPoints),
+        estimatedThrowsToFinish: telemetryNumber(row.targetDiagnostics.estimatedThrowsToFinish),
+        captureRisk: telemetryNumber(row.targetDiagnostics.captureRisk, 4)
+      } : null,
       intendedMove: telemetryMove(row.bestMove),
       intendedState: after ? telemetryStateDiagnostics(after, 'player', model) : null
     };
@@ -513,6 +676,7 @@ export function buildRollTelemetry(game, recommendation = recommendRoll(game, 'p
     engineVersion: recommendation.version ?? 'v2',
     horizon: recommendation.horizon ?? SEARCH_DEPTH,
     utilityScale: 'internal-relative-not-percentage',
+    rankingBasis: 'Gold chance estimate → win potential → projected points → throws → safety → search utility',
     probabilityModel: { ...recommendation.probabilityModel },
     recommendation: {
       rollKey: recommendation.best.rollKey,
@@ -591,9 +755,15 @@ export function evaluateOpeningPlans(game, actor = 'player', model = getProbabil
   const memo = new Map();
   const rows = ROLL_KEYS.map(rollKey => {
     const evaluated = evaluatePlayerSelection(game, rollKey, SEARCH_DEPTH, model, memo);
-    const row = { rollKey, value: evaluated.value, outcomes: evaluated.outcomes };
+    const row = {
+      rollKey,
+      value: evaluated.value,
+      outcomes: evaluated.outcomes,
+      selectionDiagnostics: selectionDiagnostics(evaluated, model),
+      targetDiagnostics: targetOutcomeDiagnostics(evaluated, rollKey, model)
+    };
     return { ...row, plan: classifyOpeningPlan(game, row, model) };
-  }).sort((a, b) => b.value - a.value);
+  }).sort(compareRollRows);
   return rows;
 }
 
@@ -607,7 +777,13 @@ export function recommendRoll(game, actor = 'player') {
 
   const rows = ROLL_KEYS.map(rollKey => {
     const evaluated = evaluatePlayerSelection(game, rollKey, SEARCH_DEPTH, model, memo);
-    const row = { rollKey, value: evaluated.value, outcomes: evaluated.outcomes };
+    const row = {
+      rollKey,
+      value: evaluated.value,
+      outcomes: evaluated.outcomes,
+      selectionDiagnostics: selectionDiagnostics(evaluated, model),
+      targetDiagnostics: targetOutcomeDiagnostics(evaluated, rollKey, model)
+    };
     const plan = opening ? classifyOpeningPlan(game, row, model) : null;
     const intended = evaluated.outcomes.find(outcome => outcome.actualRoll === rollKey);
     const intendedMove = intended?.bestMove ?? null;
@@ -627,9 +803,11 @@ export function recommendRoll(game, actor = 'player') {
       bestMove: intendedMove,
       reason,
       plan,
-      details: evaluated
+      details: evaluated,
+      selectionDiagnostics: row.selectionDiagnostics,
+      targetDiagnostics: row.targetDiagnostics
     };
-  }).sort((a, b) => b.value - a.value);
+  }).sort(compareRollRows);
 
   return remember(rollRecommendationCache, cacheKey, {
     best: rows[0],
@@ -639,7 +817,10 @@ export function recommendRoll(game, actor = 'player') {
     probabilityModel: {
       source: model.source,
       cpuRolls: model.sample.cpuRolls,
-      selectedPlayerRolls: model.sample.selectedPlayerRolls
+      selectedPlayerRolls: model.sample.selectedPlayerRolls,
+      selectionMultiplier: model.selectionMultiplier,
+      rawSelectionMultiplier: model.rawSelectionMultiplier,
+      confidence: model.confidence ? { ...model.confidence } : null
     }
   });
 }
@@ -679,7 +860,11 @@ export const __strategyInternals = {
   boardValue,
   projectedRewardPoints,
   goldPotential,
+  goldChanceEstimate,
   winPotential,
+  selectionDiagnostics,
+  targetOutcomeDiagnostics,
+  compareRollRows,
   estimatedThrowsToFinish,
   isOpeningState,
   searchTurn,

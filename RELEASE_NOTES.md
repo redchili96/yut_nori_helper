@@ -1,3 +1,23 @@
+# Yut Nori Helper v0.9.1 — Strategy Stability Hotfix
+
+## Fixed
+- Prevented probability recommendation collapse from silently defaulting to `Back Do` when the fitted selector effect is neutral.
+- Added explicit low/medium/high selector-effect confidence and strong evidence shrinkage toward a neutral multiplier.
+- Repriced exposed stacks using expected capture/reset damage; a dangerous two-piece O2 stack is now correctly downgraded against safer movement.
+- Replaced the old threshold-like Gold proxy with a graded conservative Gold-completion estimate.
+- Probability ranking is now Gold-first, then win potential, projected points, expected throws, safety and search utility.
+
+## Telemetry
+- JSON decision telemetry now records the ranking basis, selector confidence, raw/effective multiplier, Gold estimate and decision metrics.
+- CSV exports add the principal probability-confidence and decision-metric fields.
+- Existing schema-v1 logs remain compatible.
+
+## Validation
+- Added regression tests for utility-collapse tie-breaking, exposed-stack avoidance, selector confidence shrinkage and graded Gold estimation.
+- Full suite: 57/57 passing before release packaging.
+
+---
+
 # Yut Nori Helper v0.9.0 — Interactive Board
 
 ## Added

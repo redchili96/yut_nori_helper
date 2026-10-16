@@ -42,3 +42,26 @@ test('community archive replaces the seed calibration after minimum sample thres
   assert.equal(model.sample.cpuRolls, 40);
   assert.equal(model.sample.selectedPlayerRolls, 30);
 });
+
+test('v0.9.1 shrinks sparse selection evidence and exposes confidence metadata', () => {
+  const events = [];
+  const baseline = ['BACK_DO','DO','GAE','GEOL','YUT','MO'];
+  for (let i = 0; i < 60; i += 1) {
+    events.push({ type: 'roll', actor: 'computer', rollKey: baseline[i % baseline.length] });
+  }
+  for (let i = 0; i < 60; i += 1) {
+    const selectedProbability = baseline[i % baseline.length];
+    const rollKey = baseline[(i + 1) % baseline.length]; // deliberately never matches selection
+    events.push({ type: 'roll', actor: 'player', selectedProbability, rollKey });
+  }
+
+  const model = buildProbabilityModel([{ events }], { minCommunityCpuRolls: 0, minCommunitySelectedRolls: 0 });
+  assert.ok(model.rawSelectionMultiplier <= 1);
+  assert.equal(model.selectionMultiplier, 1);
+  assert.equal(model.confidence.level, 'low');
+  assert.ok(model.confidence.evidenceWeight > 0 && model.confidence.evidenceWeight < 0.5);
+  for (const selected of ROLL_KEYS) {
+    const dist = distributionFor('player', selected, model);
+    for (const key of ROLL_KEYS) assert.ok(Math.abs(dist[key] - model.baseline[key]) < 1e-12);
+  }
+});

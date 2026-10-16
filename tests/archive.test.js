@@ -92,7 +92,7 @@ test('CSV adds telemetry analysis columns while retaining legacy roll columns', 
   assert.match(csv, /recommendedProbability,recommendedProbabilityUtility,selectedProbabilityRank,selectedProbabilityUtility,probabilityUtilityGap/);
   assert.match(csv, /recommendedMoveUtility,actualMoveRank,actualMoveUtility,moveUtilityGap/);
   assert.match(csv, /GAE,GEOL/);
-  assert.match(csv, /DO,120,2,87,33,200,1,200,0/);
+  assert.match(csv, /DO,120,2,87,33,[^\n]*,200,1,200,0/);
 });
 
 

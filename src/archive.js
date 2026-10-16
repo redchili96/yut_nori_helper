@@ -113,7 +113,9 @@ export function archiveToCsv(games) {
   const headers = [
     'sourceId','gameId','helperVersion','startedAt','winner','finalPoints','finalBand','throwsRemaining',
     'eventIndex','actor','inputMethod','selectedProbability','actualRoll','bonus','pieceIds','from','to','route','captured','finishedCount','special',
-    'recommendedProbability','recommendedProbabilityUtility','selectedProbabilityRank','selectedProbabilityUtility','probabilityUtilityGap','recommendedMoveUtility','actualMoveRank','actualMoveUtility','moveUtilityGap'
+    'recommendedProbability','recommendedProbabilityUtility','selectedProbabilityRank','selectedProbabilityUtility','probabilityUtilityGap',
+    'probabilityConfidence','selectionMultiplier','rawSelectionMultiplier','goldChanceEstimate','winPotentialProxy','projectedRewardPoints','estimatedThrowsToFinish','captureRisk',
+    'recommendedMoveUtility','actualMoveRank','actualMoveUtility','moveUtilityGap'
   ];
   const esc = value => {
     const s = value == null ? '' : String(value);
@@ -129,6 +131,9 @@ export function archiveToCsv(games) {
         event.index, event.actor, event.inputMethod ?? nextMove?.inputMethod ?? '', event.selectedProbability ?? '', event.rollKey ?? '', Boolean(event.bonus),
         nextMove?.pieceIds?.join('+') ?? '', nextMove?.from ?? '', nextMove?.to ?? '', nextMove?.route ?? '', nextMove?.captured?.join('+') ?? '', nextMove?.finishedCount ?? '', nextMove?.special ?? '',
         event.recommendedProbability ?? '', event.strategyTelemetry?.recommendation?.utility ?? '', event.strategyTelemetry?.selectedChoice?.rank ?? '', event.strategyTelemetry?.selectedChoice?.utility ?? '', event.strategyTelemetry?.selectedChoice?.utilityGapFromBest ?? '',
+        event.strategyTelemetry?.probabilityModel?.confidence?.level ?? '', event.strategyTelemetry?.probabilityModel?.selectionMultiplier ?? '', event.strategyTelemetry?.probabilityModel?.rawSelectionMultiplier ?? '',
+        event.strategyTelemetry?.alternatives?.[0]?.decisionMetrics?.goldChanceEstimate ?? '', event.strategyTelemetry?.alternatives?.[0]?.decisionMetrics?.winPotentialProxy ?? '',
+        event.strategyTelemetry?.alternatives?.[0]?.decisionMetrics?.projectedRewardPoints ?? '', event.strategyTelemetry?.alternatives?.[0]?.decisionMetrics?.estimatedThrowsToFinish ?? '', event.strategyTelemetry?.alternatives?.[0]?.decisionMetrics?.captureRisk ?? '',
         nextMove?.strategyTelemetry?.recommendation?.utility ?? '', nextMove?.strategyTelemetry?.actualChoice?.rank ?? '', nextMove?.strategyTelemetry?.actualChoice?.utility ?? '', nextMove?.strategyTelemetry?.actualChoice?.utilityGapFromBest ?? ''
       ]);
     }

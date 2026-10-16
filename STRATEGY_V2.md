@@ -77,3 +77,13 @@ This conclusion is provisional and can change as imported community logs alter t
 - No reliable win-rate or Gold-rate percentages are shown yet.
 
 A later v3 can replace the provisional chance model with larger-sample calibration and deeper Monte Carlo / expectimax evaluation, preferably in a Web Worker if search depth materially increases.
+
+## v0.9.1 Strategy Stability Hotfix
+
+The first v0.9.0 telemetry sample exposed three practical weaknesses that are corrected without changing the board/rules engine:
+
+1. **Selector utility collapse** — when the fitted Probability-selection effect reaches a neutral multiplier, all six selector choices can have identical expected search utility. v0.9.1 keeps that neutral calibration but adds an explicit target-line secondary ordering, so array order cannot silently make Back Do the recommendation.
+2. **Exposed-stack overvaluation** — immediate capture exposure now includes expected reset/progress loss and the probability of losing a two-piece stack. Stack efficiency remains valuable only when the resulting stack is sufficiently safe.
+3. **Gold threshold saturation** — the old bounded Gold proxy is replaced by a graded conservative Gold-completion estimate. Probability choices are ranked lexicographically by Gold estimate, then win potential, projected points, estimated throws, capture risk and finally raw search utility.
+
+The Probability model now stores both raw and evidence-shrunk selection multipliers plus a low/medium/high confidence indicator. A neutral effective multiplier means the archive does not currently prove that selecting a target meaningfully changes the roll distribution; it does not mean the selector is proven ineffective.

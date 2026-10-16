@@ -14,7 +14,7 @@ let boardSelection = null;
 let boardInference = null;
 let dragState = null;
 let suppressBoardClickUntil = 0;
-const HELPER_VERSION = '0.9.0';
+const HELPER_VERSION = '0.9.1';
 const sourceId = createSourceId();
 let session = { gameId: makeId('game'), startedAt: new Date().toISOString() };
 
@@ -767,8 +767,12 @@ function renderActionState() {
 function renderRecommendation() {
   const rec = game.phase === 'PLAYING' && !game.winner && game.turn === 'player' && !game.pendingRoll
     ? recommendRoll(game, 'player') : null;
+  const probabilityConfidence = rec?.probabilityModel?.confidence?.level;
+  const probabilityNote = probabilityConfidence
+    ? `Probability effect confidence: ${probabilityConfidence}.`
+    : 'Provisional community probabilities.';
   $('#recommendation').innerHTML = rec
-    ? `<strong>${rollLabel(rec.best.rollKey)}</strong><span>${rec.best.reason}</span><small>Strategy v2 · multi-turn search · provisional community probabilities.</small>`
+    ? `<strong>${rollLabel(rec.best.rollKey)}</strong><span>${rec.best.reason}</span><small>Strategy v2 · Gold-first ranking · ${probabilityNote}</small>`
     : '';
 
   if (rec && !selectedProbability) selectedProbability = rec.best.rollKey;

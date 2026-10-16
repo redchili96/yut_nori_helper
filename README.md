@@ -1,4 +1,4 @@
-# M2 Companion — Yut Nori Helper v0.9.0 (Beta)
+# M2 Companion — Yut Nori Helper v0.9.1 (Beta)
 
 Manual-state browser helper for the 2026 Gameforge Metin2 Yut Nori event.
 
@@ -27,7 +27,7 @@ A one-roll movement must be inferable from the current state. If a CPU sequence 
 
 ## Strategy Engine v2
 
-v0.8.0 includes Strategy Engine v2, which replaces the one-step Strategy v1 ranking with a depth-limited expectimax-style planner.
+Strategy Engine v2, which replaces the one-step Strategy v1 ranking with a depth-limited expectimax-style planner.
 
 The strategy objective is ordered around:
 
@@ -65,9 +65,9 @@ Recommendation-level and state-level memoization keep repeated UI renders inexpe
 The default provisional model is seeded from the community logs reviewed on 2026-10-11:
 
 - base roll distribution is estimated from observed CPU rolls;
-- the Probability selector is represented by one common multiplicative lift fitted from observed selected-option → actual-result data;
-- the model does **not** assume equal 1/6 roll probabilities;
-- the fitted lift is an evidence-based provisional model, not a claimed Gameforge RNG constant;
+- the Probability selector uses a common fitted selection effect, but v0.9.1 shrinks that effect strongly toward neutral until the archive contains substantially more evidence;
+- the model reports low/medium/high evidence confidence and does **not** assume equal 1/6 roll probabilities;
+- if the fitted selection effect collapses to neutral, the Helper no longer defaults to the first option: it ranks the requested target line by Gold feasibility, win potential, throw efficiency and safety;
 - imported/local community archives automatically replace the seed calibration once minimum sample thresholds are reached.
 
 No win-rate or Gold-rate percentage is shown because the dataset is still too small for a reliable calibrated prediction.
@@ -125,3 +125,14 @@ The utility values are internal relative scores, not predicted win rates or perc
 ## v0.9.0 — Interactive Board
 
 The board is now an input surface. Click or drag the active piece to mirror Metin2 and the Helper will infer the observed roll whenever the transition is unique. Ambiguous Finish/route cases require explicit confirmation. Existing button input, Undo/Redo, Resync, Strategy v2 and Strategy Telemetry remain available.
+
+
+## v0.9.1 — Strategy Stability Hotfix
+
+This hotfix was driven by the first v0.9.0 telemetry sample and changes Strategy v2 in three focused areas:
+
+- **Probability stability:** sparse selected-roll evidence is shrunk toward a neutral selector effect and carries an explicit confidence level. When calibrated utilities collapse, a strategic target-line tie-break prevents arbitrary `Back Do` recommendations.
+- **Stack-risk pricing:** exposed two-piece stacks are penalized by expected reset damage, progress loss and the probability of a stack capture. Safe stacks remain valuable; dangerous stacks such as an exposed O2 stack no longer receive a blanket efficiency premium.
+- **Gold-first ranking:** probability choices are ranked lexicographically by conservative Gold-completion estimate, then win potential, projected points, estimated throws, capture risk and finally search utility. The previous near-binary Gold proxy was replaced with a graded estimate.
+
+New JSON telemetry stores the ranking basis, selector confidence, effective/raw selection multipliers, Gold estimate and decision metrics. CSV export includes the principal hotfix diagnostics. Community Log schema remains version 1.
